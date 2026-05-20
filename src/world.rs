@@ -404,6 +404,37 @@ impl World {
         push_b(&mut buildings, 29, 92, 4, 5, BuildingKind::Ruin);
         push_b(&mut buildings, 15, 102, 4, 3, BuildingKind::Ruin);
 
+        // === Reale Germeringer Landmarks (zusätzliche Wiedererkennbarkeit) ===
+        // Feuerwehr Germering (an der Kerschensteinerstraße — wir nehmen Stadtmitte)
+        push_b(&mut buildings, 132, 65, 5, 6, BuildingKind::Industrial);
+        // Volksfestplatz-Bühne (kleine Halle nahe Stadthalle)
+        push_b(&mut buildings, 73, 60, 6, 4, BuildingKind::Industrial);
+        // Tennisclub Germering (südl. vom Freibad)
+        push_b(&mut buildings, 144, 72, 8, 4, BuildingKind::Shop);
+        // Polizeiwache Germering
+        push_b(&mut buildings, 124, 65, 6, 5, BuildingKind::Apartment);
+        // Sparkasse / Bank an der Münchner Straße
+        push_b(&mut buildings, 53, 60, 5, 4, BuildingKind::Shop);
+        // Aldi / REWE Discounter im Gewerbegebiet
+        push_b(&mut buildings, 154, 24, 6, 6, BuildingKind::Industrial);
+        // Bauhaus Baumarkt am Cewestr-Eingang
+        push_b(&mut buildings, 188, 18, 10, 4, BuildingKind::Industrial);
+        // Kindergarten am Stadtpark
+        push_b(&mut buildings, 91, 32, 6, 5, BuildingKind::Schule);
+
+        // === Ihle-Filiale-Gebäude — Filialen liegen IN diesen Shops ===
+        // Maße passen exakt zum IhleWall-Stempel (5 breit × 3 hoch, dy -1..=1)
+        // → die Wand-Tiles werden später drüber gestempelt, das Building-Detail
+        //   rendert die hübsche Schaufenster-Fassade darüber.
+        for f in &FILIALEN {
+            push_b(
+                &mut buildings,
+                f.tile_x - 2, f.tile_y - 1,
+                5, 3,
+                BuildingKind::Shop,
+            );
+        }
+
         // Gebäude in die Tile-Map einbacken
         for b in &buildings {
             for y in b.y..(b.y + b.h).min(h) {

@@ -323,8 +323,9 @@ pub const LAKE_CHECKPOINTS: [(i32, i32); 4] = [
 //  S-Bahn — zwei echte Germering-Stationen: Harthaus (West) + Germering (Ost)
 // --------------------------------------------------------------------
 
-/// Sekunden zwischen Zugdurchfahrten (Spielzeit).
-pub const TRAIN_INTERVAL_SECONDS: f32 = 90.0;
+/// Sekunden Standzeit am Streckenende, bis die S-Bahn wendet und zurückfährt.
+/// Vorher war das die "Off-Map-Pause" — jetzt wartet die Bahn am Wendepunkt.
+pub const TRAIN_INTERVAL_SECONDS: f32 = 12.0;
 /// Y-Tile-Koordinate der S8-Gleise.
 pub const TRAIN_TRACK_TILE_Y: i32 = 14;
 /// Y-Tile-Koordinate des Bahnsteigs (hier landen die Münzen).
@@ -357,12 +358,62 @@ pub struct BusLine {
 
 /// Echte Buslinien rund um Germering (MVV + lokale).
 pub const BUS_LINES: [BusLine; 5] = [
-    BusLine { number: "851", name: "Germering Bf - Puchheim" },
-    BusLine { number: "843", name: "Germering - Gilching" },
-    BusLine { number: "844", name: "Germering - Olching" },
-    BusLine { number: "X910", name: "Express Stadtmitte" },
-    BusLine { number: "732", name: "Schulbus Germering" },
+    BusLine { number: "851", name: "Bf Germering - Harthaus" },
+    BusLine { number: "843", name: "GEP - Cewestr." },
+    BusLine { number: "844", name: "Parsberg - Klinikum" },
+    BusLine { number: "X910", name: "Friedenstr. - Polariom" },
+    BusLine { number: "732", name: "Cordobar - Forst-Ost" },
 ];
+
+/// Eine Buslinie pendelt zwischen zwei festen Haltestellen in Germering.
+/// Beide Endpunkte liegen innerhalb der Karte; der Bus verlässt die Karte nie.
+pub struct BusRoute {
+    pub line_idx: usize,
+    /// Y-Tile-Koordinate der Straße, auf der der Bus fährt (h_road).
+    pub road_y_tile: i32,
+    /// Tile-X der westlichen Endhaltestelle (Anfangsstation).
+    pub start_tile_x: i32,
+    /// Tile-X der östlichen Endhaltestelle (Endstation).
+    pub end_tile_x: i32,
+    pub start_name: &'static str,
+    pub end_name: &'static str,
+}
+
+/// Feste Bus-Pendelrouten innerhalb von Germering.
+/// Jede Linie hat eine West- und eine Ost-Endstation, an denen der Bus wendet.
+pub const BUS_ROUTES: [BusRoute; 5] = [
+    BusRoute {
+        line_idx: 0, road_y_tile: 20,
+        start_tile_x: 65, end_tile_x: 160,
+        start_name: "Bf Harthaus", end_name: "Cewestr.",
+    },
+    BusRoute {
+        line_idx: 1, road_y_tile: 40,
+        start_tile_x: 38, end_tile_x: 162,
+        start_name: "GEP", end_name: "Cewestr.",
+    },
+    BusRoute {
+        line_idx: 2, road_y_tile: 60,
+        start_tile_x: 12, end_tile_x: 168,
+        start_name: "Parsberg", end_name: "Klinikum",
+    },
+    BusRoute {
+        line_idx: 3, road_y_tile: 80,
+        start_tile_x: 62, end_tile_x: 168,
+        start_name: "Friedenstr.", end_name: "Polariom",
+    },
+    BusRoute {
+        line_idx: 4, road_y_tile: 100,
+        start_tile_x: 45, end_tile_x: 145,
+        start_name: "Cordobar", end_name: "Forst-Ost",
+    },
+];
+
+/// Sekunden Standzeit an der Endhaltestelle, bevor der Bus wendet.
+pub const BUS_DWELL_SECONDS: f32 = 3.5;
+
+/// Mindestabstand zum vorausfahrenden Fahrzeug (Bus folgt Bus / folgt Auto).
+pub const BUS_FOLLOW_GAP: f32 = 38.0;
 
 /// Schaden, wenn ein Bus den Spieler überfährt.
 pub const BUS_DAMAGE: i32 = 1;

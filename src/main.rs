@@ -178,10 +178,13 @@ enum BusDir { East, West }
 #[derive(Clone)]
 struct Bus {
     line_idx: usize,    // Index in BUS_LINES
+    route_idx: usize,   // Index in BUS_ROUTES — fester Pendelweg
     x: f32,
     y: f32,             // Welt-Y (auf einer h_road)
     dir: BusDir,
     speed: f32,
+    /// Standzeit an der Endhaltestelle (>0 = Bus steht still & wendet danach).
+    dwell_t: f32,
     swear_t: f32,       // Anzeigedauer der Schimpf-Sprechblase
     swear_text: String,
     honk_t: f32,        // Hupgeräusch-Indikator
@@ -975,12 +978,14 @@ impl Game {
         // (2) Bus-Boarding / Aussteigen
         if !e_consumed && e_pressed {
             if let Some(_uid) = self.riding_bus_uid {
-                // Aussteigen — Spieler 1 Tile südlich vom Bus absetzen
+                // Aussteigen — Spieler auf den Gehsteig nördlich oder südlich
+                // der Straße absetzen (je nachdem was frei ist).
                 if let Some(uid) = self.riding_bus_uid {
                     if let Some(idx) = self.bus_uids.iter().position(|u| *u == uid) {
                         let b = &self.buses[idx];
+                        // Sidewalk ist ~1 Tile südlich der Straße
                         self.player.aabb.x = b.x + 6.0;
-                        self.player.aabb.y = b.y + 18.0;
+                        self.player.aabb.y = b.y + 20.0;
                     }
                 }
                 self.riding_bus_uid = None;
@@ -1009,11 +1014,16 @@ impl Game {
                         if let Some(&uid) = self.bus_uids.get(i) {
                             self.riding_bus_uid = Some(uid);
                             let line = BUS_LINES[self.buses[i].line_idx].number;
+                            let route = &BUS_ROUTES[self.buses[i].route_idx];
+                            let dest = match self.buses[i].dir {
+                                BusDir::East => route.end_name,
+                                BusDir::West => route.start_name,
+                            };
                             self.bus_ride_msg = format!(
-                                "Linie {} - Mitfahrt ({} M)",
-                                line, BUS_RIDE_COST
+                                "Linie {} -> {} ({} M)",
+                                line, dest, BUS_RIDE_COST
                             );
-                            self.bus_ride_msg_t = 2.5;
+                            self.bus_ride_msg_t = 3.0;
                             self.audio.play_sfx(&self.audio.jingle);
                         }
                         e_consumed = true;
@@ -1263,9 +1273,11 @@ impl Game {
             }
             TrainPhase::Leaving => {
                 self.train_x += dir_sign * leave_speed * dt;
+                // Wende-Punkte am Rand der Karte — danach kommt der Zug kurz darauf
+                // zurück Richtung Germering und Harthaus.
                 let off = match self.train_dir {
-                    TrainDir::East => self.train_x > map_right + train_len + 16.0,
-                    TrainDir::West => self.train_x < track_left - train_len - 16.0,
+                    TrainDir::East => self.train_x > map_right + train_len * 0.5,
+                    TrainDir::West => self.train_x < track_left - train_len * 0.5,
                 };
                 if off {
                     self.train_phase = TrainPhase::Idle;
@@ -1340,92 +1352,161 @@ impl Game {
         }
     }
 
-    /// Busse spawnen, fahren auf horizontalen Straßen, halten an Ampeln &
-    /// Zebras. Bei Stau wird die Geschwindigkeit reduziert.
+    /// Busse pendeln auf festen Routen zwischen zwei Germeringer Endhaltestellen
+    /// hin und her, halten an Ampeln + Zebras, folgen einander (kein Durchfahren).
+    ///
+    /// Sitzt der Spieler im Bus, schweigt der Bus (kein Hupen) und triggert keinen
+    /// Zebra-Halt (sonst würde der Bus sich selbst „erkennen" und stehen bleiben).
     fn tick_buses(&mut self, dt: f32) {
         self.bus_hit_cooldown = (self.bus_hit_cooldown - dt).max(0.0);
-        // Spawn-Timer — viele Busse für lebendige Stadt
-        self.bus_spawn_t -= dt;
-        if self.bus_spawn_t <= 0.0 && self.buses.len() < 10 {
-            self.bus_spawn_t = 3.5 + (self.game_seconds * 1.7).sin().abs() * 2.0;
-            let line_idx = ((self.game_seconds * 0.7) as usize + self.buses.len())
-                % BUS_LINES.len();
-            let h_roads = [20i32, 40, 60, 80, 100];
-            let road_idx = ((self.game_seconds * 0.5) as usize + self.buses.len() / 2)
-                % h_roads.len();
-            let road_y = h_roads[road_idx] as f32 * TILE_SIZE;
-            let east = (line_idx + road_idx) % 2 == 0;
-            let (x, dir) = if east {
-                (-32.0, BusDir::East)
-            } else {
-                (MAP_W as f32 * TILE_SIZE + 4.0, BusDir::West)
-            };
-            self.buses.push(Bus {
-                line_idx,
-                x,
-                y: road_y,
-                dir,
-                speed: 60.0 + (line_idx as f32) * 4.0,
-                swear_t: 0.0,
-                swear_text: String::new(),
-                honk_t: 0.0,
-            });
-            self.bus_uids.push(self.bus_next_uid);
-            self.bus_next_uid += 1;
+
+        // Beim ersten Tick: für jede Route GENAU einen Bus an seiner Start-Endhaltestelle.
+        if self.buses.is_empty() {
+            for (ri, route) in BUS_ROUTES.iter().enumerate() {
+                let start_x = route.start_tile_x as f32 * TILE_SIZE;
+                let road_y = route.road_y_tile as f32 * TILE_SIZE;
+                self.buses.push(Bus {
+                    line_idx: route.line_idx,
+                    route_idx: ri,
+                    x: start_x,
+                    y: road_y,
+                    dir: BusDir::East,
+                    speed: 58.0 + (route.line_idx as f32) * 4.0,
+                    dwell_t: 0.5 + ri as f32 * 0.4,
+                    swear_t: 0.0,
+                    swear_text: String::new(),
+                    honk_t: 0.0,
+                });
+                self.bus_uids.push(self.bus_next_uid);
+                self.bus_next_uid += 1;
+            }
         }
 
         // Vorbereitung
-        let map_right = MAP_W as f32 * TILE_SIZE;
         let pcx_p = self.player.aabb.x;
         let pcy_p = self.player.aabb.y;
         let traffic_t = self.traffic_phase_t;
-        let active_zebras = self.active_zebras_world();
+        let riding = self.riding_bus_uid.is_some();
+        // Wenn der Spieler im Bus mitfährt, NICHT seinen "Zebra-Anker" verwenden,
+        // sonst stoppt der Bus an jedem Streifen den er selbst gerade überfährt.
+        let active_zebras: Vec<(f32, f32)> = if riding {
+            Vec::new()
+        } else {
+            self.active_zebras_world()
+        };
         let jam_road_y = if self.traffic_jam_t > 0.0 { Some(self.traffic_jam_road_y) } else { None };
+
+        // Snapshot für Follow-Logik (Position, Y, Ost-Richtung, Länge).
+        let bus_snap: Vec<(f32, f32, bool, f32)> = self.buses
+            .iter()
+            .map(|b| (b.x, b.y, matches!(b.dir, BusDir::East), 30.0))
+            .collect();
+        let car_snap: Vec<(f32, f32, bool, f32)> = self.cars
+            .iter()
+            .map(|c| (c.x, c.y, matches!(c.dir, CarDir::East), 20.0))
+            .collect();
 
         let mut player_hit_by_bus = false;
         let mut swear_idx: Option<(usize, &'static str)> = None;
-        for (i, b) in self.buses.iter_mut().enumerate() {
-            b.swear_t = (b.swear_t - dt).max(0.0);
-            b.honk_t = (b.honk_t - dt).max(0.0);
+        let bus_count = self.buses.len();
+        for i in 0..bus_count {
+            // Felder rauskopieren, damit wir &mut self.buses[i] nicht halten müssen.
+            let route_idx = self.buses[i].route_idx;
+            let route = &BUS_ROUTES[route_idx];
+            let start_x_w = route.start_tile_x as f32 * TILE_SIZE;
+            let end_x_w = route.end_tile_x as f32 * TILE_SIZE;
+            let speed_base = self.buses[i].speed;
+            let in_jam = jam_road_y.map(|y| (self.buses[i].y - y).abs() < 6.0).unwrap_or(false);
+            let target_speed = if in_jam { speed_base * 0.30 } else { speed_base };
 
-            // Stau?
-            let in_jam = jam_road_y.map(|y| (b.y - y).abs() < 6.0).unwrap_or(false);
-            let target_speed = if in_jam { b.speed * 0.25 } else { b.speed };
+            // Timer
+            {
+                let b = &mut self.buses[i];
+                b.swear_t = (b.swear_t - dt).max(0.0);
+                b.honk_t = (b.honk_t - dt).max(0.0);
+                b.dwell_t = (b.dwell_t - dt).max(0.0);
+            }
 
-            // Soll der Bus halten?
-            let dir_east = matches!(b.dir, BusDir::East);
-            let stop_now = vehicle_should_stop(
-                b.x, b.y, dir_east, 30.0, traffic_t, &active_zebras,
+            // Standzeit an Endhaltestelle?
+            if self.buses[i].dwell_t > 0.0 {
+                // steht still — beim Auslaufen Richtung wechseln (durch dwell-Flag-Logik
+                // direkt: am Übergang dwell_t -> 0 wenden wir die Richtung im nächsten
+                // Tick — siehe unten beim Endpunkt-Check).
+                continue;
+            }
+
+            let dir_east = matches!(self.buses[i].dir, BusDir::East);
+            // Stoppen wegen Ampel oder Zebra?
+            let mut stop_now = vehicle_should_stop(
+                self.buses[i].x, self.buses[i].y, dir_east, 30.0, traffic_t, &active_zebras,
             );
+
+            // Follow-Logik: nicht in den Bus/das Auto vor mir reinfahren.
+            if !stop_now {
+                let me_x = self.buses[i].x;
+                let me_y = self.buses[i].y;
+                let front_x = if dir_east { me_x + 30.0 } else { me_x };
+                let check = |ox: f32, oy: f32, oe: bool, ol: f32| -> bool {
+                    if (oy - me_y).abs() > 6.0 { return false; }
+                    if oe != dir_east { return false; }
+                    let other_back = if dir_east { ox } else { ox + ol };
+                    let gap = if dir_east { other_back - front_x } else { front_x - other_back };
+                    gap > -2.0 && gap < BUS_FOLLOW_GAP
+                };
+                for (j, &(ox, oy, oe, ol)) in bus_snap.iter().enumerate() {
+                    if j == i { continue; }
+                    if check(ox, oy, oe, ol) { stop_now = true; break; }
+                }
+                if !stop_now {
+                    for &(ox, oy, oe, ol) in car_snap.iter() {
+                        if check(ox, oy, oe, ol) { stop_now = true; break; }
+                    }
+                }
+            }
+
+            // Bewegung anwenden
             let v = if stop_now {
                 0.0
-            } else {
-                match b.dir {
-                    BusDir::East => target_speed,
-                    BusDir::West => -target_speed,
-                }
-            };
-            b.x += v * dt;
+            } else if dir_east { target_speed } else { -target_speed };
+            self.buses[i].x += v * dt;
 
-            // Hupen
-            let dx = pcx_p - b.x;
-            let dy = pcy_p - b.y;
-            if dx.abs() < 80.0 && dy.abs() < 24.0 && b.honk_t <= 0.0 {
-                let in_front = match b.dir {
-                    BusDir::East => dx > 0.0 && dx < 80.0,
-                    BusDir::West => dx < 0.0 && dx > -80.0,
-                };
-                if in_front && !stop_now {
-                    b.honk_t = 2.0;
+            // Endhaltestelle erreicht?
+            let mut reached_end = false;
+            if dir_east && self.buses[i].x >= end_x_w {
+                self.buses[i].x = end_x_w;
+                self.buses[i].dir = BusDir::West;
+                self.buses[i].dwell_t = BUS_DWELL_SECONDS;
+                reached_end = true;
+            } else if !dir_east && self.buses[i].x <= start_x_w {
+                self.buses[i].x = start_x_w;
+                self.buses[i].dir = BusDir::East;
+                self.buses[i].dwell_t = BUS_DWELL_SECONDS;
+                reached_end = true;
+            }
+            let _ = reached_end;
+
+            // Hupen — nur wenn der Spieler NICHT in diesem Bus sitzt.
+            let player_in_this_bus = self.riding_bus_uid
+                .map(|uid| self.bus_uids.get(i).map(|u| *u == uid).unwrap_or(false))
+                .unwrap_or(false);
+            if !player_in_this_bus {
+                let dx = pcx_p - self.buses[i].x;
+                let dy = pcy_p - self.buses[i].y;
+                let in_range = dx.abs() < 70.0 && dy.abs() < 18.0 && self.buses[i].honk_t <= 0.0;
+                if in_range {
+                    let in_front = match self.buses[i].dir {
+                        BusDir::East => dx > 0.0 && dx < 70.0,
+                        BusDir::West => dx < 0.0 && dx > -70.0,
+                    };
+                    if in_front && !stop_now {
+                        self.buses[i].honk_t = 2.0;
+                    }
                 }
             }
 
             // Kollision (nur wenn Spieler NICHT in diesem Bus mitfährt)
-            let player_in_this_bus = self.riding_bus_uid
-                .map(|uid| self.bus_uids.get(i).map(|u| *u == uid).unwrap_or(false))
-                .unwrap_or(false);
             if !player_in_this_bus
-                && b.aabb().intersects(&self.player.aabb)
+                && self.buses[i].aabb().intersects(&self.player.aabb)
                 && self.bus_hit_cooldown <= 0.0
                 && self.player.damage_flash <= 0.0
                 && self.player.powerups.invuln <= 0.0
@@ -1457,57 +1538,25 @@ impl Game {
             ));
         }
 
-        // Wenn der Spieler mitfährt — Position an den Bus klemmen
+        // Wenn der Spieler mitfährt — Position an den Bus klemmen.
+        // Wir packen ihn IN die Mitte des Busses, das Sprite wird im Render-Pass
+        // versteckt; stattdessen schaut nur ein Kopf aus dem Fenster.
         if let Some(uid) = self.riding_bus_uid {
             if let Some(idx) = self.bus_uids.iter().position(|u| *u == uid) {
                 let b = &self.buses[idx];
-                self.player.aabb.x = b.x + 6.0;
-                self.player.aabb.y = b.y - 2.0;
+                self.player.aabb.x = b.x + 9.0;
+                self.player.aabb.y = b.y + 2.0;
                 self.player.vx = 0.0;
                 self.player.vy = 0.0;
                 self.player.powerups.invuln = self.player.powerups.invuln.max(0.5);
             } else {
-                // Bus wurde despawnt → automatisch absteigen
+                // Sollte nie passieren (Busse despawnen nicht mehr) — Safety-Net.
                 self.riding_bus_uid = None;
-                self.bus_ride_msg = "Endstation - aus dem Bus!".to_string();
+                self.bus_ride_msg = "Aus dem Bus!".to_string();
                 self.bus_ride_msg_t = 2.0;
             }
         }
-
-        // Aus der Liste werfen, wenn weit außerhalb der Karte — parallel UIDs entfernen
-        let mut keep: Vec<bool> = self.buses.iter()
-            .map(|b| b.x > -120.0 && b.x < map_right + 120.0)
-            .collect();
-        // Falls der Spieler im Bus mitfährt und der Bus an der Karte verschwinden würde,
-        // dismounten wir den Spieler an der letzten Bus-Position.
-        if let Some(uid) = self.riding_bus_uid {
-            if let Some(idx) = self.bus_uids.iter().position(|u| *u == uid) {
-                if !keep[idx] {
-                    // Spieler an Map-Rand-Position sicher absetzen
-                    let b = &self.buses[idx];
-                    let mid_road_y = b.y + 16.0; // Sidewalk unter der Straße
-                    self.player.aabb.x = b.x.clamp(8.0, map_right - 8.0);
-                    self.player.aabb.y = mid_road_y;
-                    self.riding_bus_uid = None;
-                    self.bus_ride_msg = "Endstation - aus dem Bus!".to_string();
-                    self.bus_ride_msg_t = 2.0;
-                    // Forciere keep für Sicherheit (kein partieller State)
-                    let _ = &mut keep;
-                }
-            }
-        }
-        let mut i = 0;
-        let mut j = 0;
-        while i < self.buses.len() {
-            if !keep[j] {
-                self.buses.remove(i);
-                self.bus_uids.remove(i);
-                j += 1;
-            } else {
-                i += 1;
-                j += 1;
-            }
-        }
+        // Busse pendeln — kein Despawning, kein Off-Map-Cleanup mehr nötig.
     }
 
     /// NPC-Pkw: spawnen, fahren, an Ampeln + Zebras halten, Spielerkollision.
@@ -1641,12 +1690,19 @@ impl Game {
     /// Liefert die Welt-Koordinaten aller Zebrastreifen, an denen der Spieler
     /// gerade nahe genug steht (Fahrzeuge halten dann).
     fn active_zebras_world(&self) -> Vec<(f32, f32)> {
+        // Sitzt der Spieler im Bus, wird kein Streifen aktiv — sonst würde
+        // der Bus an seinem eigenen Standort halten.
+        if self.riding_bus_uid.is_some() {
+            return Vec::new();
+        }
         let (pcx, pcy) = self.player.center();
         let mut zs = Vec::new();
         for &(zx, zy) in ZEBRA_TILES.iter() {
             let zwx = zx as f32 * TILE_SIZE + 8.0;
             let zwy = zy as f32 * TILE_SIZE + 8.0;
-            if (pcx - zwx).abs() < 28.0 && (pcy - zwy).abs() < 28.0 {
+            // Großzügiger Aktivierungs-Radius, damit Autos rechtzeitig halten,
+            // wenn der Spieler auf einen Streifen zuläuft.
+            if (pcx - zwx).abs() < 36.0 && (pcy - zwy).abs() < 32.0 {
                 zs.push((zwx, zwy));
             }
         }
@@ -2427,54 +2483,78 @@ impl Game {
             }
         }
 
-        // Player
-        let (psx, psy) = self.cam.world_to_screen(self.player.aabb.x - 2.0, self.player.aabb.y - 2.0);
-        let tex = if self.player.on_water && self.player.powerups.fly <= 0.0 {
-            &self.tex.player_swim
+        // Player — wenn der Spieler im Bus sitzt, zeichnen wir nicht das
+        // volle Sprite, sondern nur einen kleinen Kopf, der aus dem
+        // Busfenster schaut.
+        if let Some(uid) = self.riding_bus_uid {
+            if let Some(bus_idx) = self.bus_uids.iter().position(|u| *u == uid) {
+                let b = &self.buses[bus_idx];
+                // Mittleres Fenster
+                let (wx, wy) = self.cam.world_to_screen(b.x + 13.0, b.y + 3.0);
+                // Schatten/Schein
+                draw_circle(wx + 1.5, wy + 1.5, 2.2, Color::new(0.0, 0.0, 0.0, 0.35));
+                // Hautfarbener Kopf
+                draw_circle(wx, wy, 2.2, Color::new(0.95, 0.78, 0.55, 1.0));
+                // Haar (oben dunkler Bogen)
+                draw_circle(wx, wy - 0.8, 2.0, Color::new(0.30, 0.20, 0.12, 1.0));
+                draw_circle(wx, wy + 0.4, 2.2, Color::new(0.95, 0.78, 0.55, 1.0));
+                // Augen
+                draw_circle(wx - 0.9, wy + 0.1, 0.4, Color::new(0.10, 0.08, 0.06, 1.0));
+                draw_circle(wx + 0.9, wy + 0.1, 0.4, Color::new(0.10, 0.08, 0.06, 1.0));
+            }
         } else {
-            // Animation nur wenn der Spieler sich tatsächlich bewegt.
-            let moving = self.player.vx.abs() > 6.0 || self.player.vy.abs() > 6.0;
-            let alt = moving && ((self.player.anim_t * 8.0) as i32 % 2 == 1);
-            match self.player.facing {
-                Facing::Down => if alt { &self.tex.player_down_b } else { &self.tex.player_down_a },
-                Facing::Up => if alt { &self.tex.player_up_b } else { &self.tex.player_up },
-                Facing::Left => if alt { &self.tex.player_left_b } else { &self.tex.player_left },
-                Facing::Right => if alt { &self.tex.player_right_b } else { &self.tex.player_right },
+            let (psx, psy) = self.cam.world_to_screen(self.player.aabb.x - 2.0, self.player.aabb.y - 2.0);
+            let tex = if self.player.on_water && self.player.powerups.fly <= 0.0 {
+                &self.tex.player_swim
+            } else {
+                // Animation nur wenn der Spieler sich tatsächlich bewegt.
+                let moving = self.player.vx.abs() > 6.0 || self.player.vy.abs() > 6.0;
+                let alt = moving && ((self.player.anim_t * 8.0) as i32 % 2 == 1);
+                match self.player.facing {
+                    Facing::Down => if alt { &self.tex.player_down_b } else { &self.tex.player_down_a },
+                    Facing::Up => if alt { &self.tex.player_up_b } else { &self.tex.player_up },
+                    Facing::Left => if alt { &self.tex.player_left_b } else { &self.tex.player_left },
+                    Facing::Right => if alt { &self.tex.player_right_b } else { &self.tex.player_right },
+                }
+            };
+            let mut tint = WHITE;
+            if self.player.powerups.invuln > 0.0 {
+                // golden blinkend
+                let t = (self.player.anim_t * 12.0).sin();
+                if t > 0.0 {
+                    tint = Color::new(1.0, 0.85, 0.15, 1.0);
+                }
             }
-        };
-        let mut tint = WHITE;
-        if self.player.powerups.invuln > 0.0 {
-            // golden blinkend
-            let t = (self.player.anim_t * 12.0).sin();
-            if t > 0.0 {
-                tint = Color::new(1.0, 0.85, 0.15, 1.0);
+            if self.player.damage_flash > 0.0 {
+                tint = Color::new(1.0, 0.5, 0.5, 1.0);
             }
+            draw_texture_ex(
+                tex,
+                psx,
+                psy,
+                tint,
+                DrawTextureParams {
+                    dest_size: Some(vec2(16.0, 16.0)),
+                    ..Default::default()
+                },
+            );
         }
-        if self.player.damage_flash > 0.0 {
-            tint = Color::new(1.0, 0.5, 0.5, 1.0);
-        }
-        draw_texture_ex(
-            tex,
-            psx,
-            psy,
-            tint,
-            DrawTextureParams {
-                dest_size: Some(vec2(16.0, 16.0)),
-                ..Default::default()
-            },
-        );
+        let (psx, psy) = self.cam.world_to_screen(self.player.aabb.x - 2.0, self.player.aabb.y - 2.0);
 
-        // Powerup-Effekte
-        if self.player.powerups.speed > 0.0 {
-            draw_circle(psx + 8.0, psy + 14.0, 4.0, Color::new(0.9, 0.55, 0.20, 0.4));
-        }
-        if self.player.powerups.fly > 0.0 {
-            // Flügel
-            draw_circle(psx + 2.0, psy + 10.0, 3.0, Color::new(1.0, 1.0, 1.0, 0.8));
-            draw_circle(psx + 14.0, psy + 10.0, 3.0, Color::new(1.0, 1.0, 1.0, 0.8));
-        }
-        if self.player.powerups.shield {
-            draw_circle_lines(psx + 8.0, psy + 8.0, 10.0, 1.0, Color::new(0.85, 0.65, 0.20, 0.8));
+        // Powerup-Effekte — nur außerhalb des Busses (sonst rendert man die
+        // Flügel mitten in der Karosserie).
+        if self.riding_bus_uid.is_none() {
+            if self.player.powerups.speed > 0.0 {
+                draw_circle(psx + 8.0, psy + 14.0, 4.0, Color::new(0.9, 0.55, 0.20, 0.4));
+            }
+            if self.player.powerups.fly > 0.0 {
+                // Flügel
+                draw_circle(psx + 2.0, psy + 10.0, 3.0, Color::new(1.0, 1.0, 1.0, 0.8));
+                draw_circle(psx + 14.0, psy + 10.0, 3.0, Color::new(1.0, 1.0, 1.0, 0.8));
+            }
+            if self.player.powerups.shield {
+                draw_circle_lines(psx + 8.0, psy + 8.0, 10.0, 1.0, Color::new(0.85, 0.65, 0.20, 0.8));
+            }
         }
 
         // Angriffs-Animation: expandierender Slash-Bogen + Inner Flash
