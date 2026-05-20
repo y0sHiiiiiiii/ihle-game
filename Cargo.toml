@@ -1,0 +1,17 @@
+[package]
+name = "germering-quest"
+version = "0.1.0"
+edition = "2021"
+authors = ["Max Huber, Bäckerlehrling"]
+description = "Germering Quest: Die Schimmel-Invasion — 2D Pixel-Art Open-World RPG"
+
+[dependencies]
+macroquad = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+[profile.dev]
+opt-level = 1
