@@ -2124,29 +2124,31 @@ impl Game {
             );
         }
 
-        // S-Bahn (prozedural — 4 rot-weiße Wagen, Lok vorne)
+        // S-Bahn (prozedural — 4 rot-weiße Wagen, Lok je nach Fahrtrichtung
+        // vorne; Anhänger ziehen hinterher)
         if self.train_phase != TrainPhase::Idle {
             let train_world_y = TRAIN_TRACK_TILE_Y as f32 * TILE_SIZE;
             let (tsx, tsy) = self.cam.world_to_screen(self.train_x, train_world_y);
             let car_w = 26.0;
             let car_h = 12.0;
             let gap = 2.0;
-            // Lok (vorne, dunkelrot)
+            let east = matches!(self.train_dir, TrainDir::East);
+            // Lok dunkelrot
             draw_rectangle(tsx, tsy + 1.0, car_w, car_h, Color::new(0.6, 0.10, 0.10, 1.0));
             draw_rectangle(tsx + 2.0, tsy + 3.0, car_w - 4.0, 3.0, Color::new(0.95, 0.95, 0.95, 1.0));
             draw_rectangle(tsx + 2.0, tsy + 8.0, 5.0, 3.0, Color::new(0.18, 0.18, 0.20, 1.0));
-            // Scheinwerfer vorne
-            draw_circle(tsx + car_w - 1.0, tsy + 5.0, 1.5, Color::new(1.0, 0.95, 0.55, 1.0));
-            // 3 Anhängerwagen
+            // Scheinwerfer in Fahrtrichtung
+            let head_x = if east { tsx + car_w - 1.0 } else { tsx + 1.0 };
+            draw_circle(head_x, tsy + 5.0, 1.5, Color::new(1.0, 0.95, 0.55, 1.0));
+            // 3 Anhängerwagen — bei Ostfahrt links der Lok, bei Westfahrt rechts der Lok
             for i in 1..=3 {
-                let cx = tsx - i as f32 * (car_w + gap);
+                let dir_off = if east { -1.0 } else { 1.0 };
+                let cx = tsx + dir_off * i as f32 * (car_w + gap);
                 draw_rectangle(cx, tsy + 1.0, car_w, car_h, Color::new(0.85, 0.18, 0.18, 1.0));
                 draw_rectangle(cx + 2.0, tsy + 3.0, car_w - 4.0, 2.0, Color::new(0.98, 0.97, 0.94, 1.0));
-                // Fenster (3 pro Wagen)
                 draw_rectangle(cx + 3.0, tsy + 6.0, 4.0, 3.0, Color::new(0.20, 0.30, 0.45, 1.0));
                 draw_rectangle(cx + 10.0, tsy + 6.0, 4.0, 3.0, Color::new(0.20, 0.30, 0.45, 1.0));
                 draw_rectangle(cx + 17.0, tsy + 6.0, 4.0, 3.0, Color::new(0.20, 0.30, 0.45, 1.0));
-                // Bei Halt: Türen öffnen sich auf der Bahnsteig-Seite
                 if self.train_phase == TrainPhase::Dwelling {
                     draw_rectangle(
                         cx + car_w / 2.0 - 3.0,
@@ -2159,11 +2161,53 @@ impl Game {
             }
             // Räder
             for i in 0..4 {
-                let cx = tsx - i as f32 * (car_w + gap);
+                let dir_off = if east { -1.0 } else { 1.0 };
+                let cx = tsx + dir_off * i as f32 * (car_w + gap);
                 draw_circle(cx + 5.0, tsy + car_h + 1.0, 2.0, BLACK);
                 draw_circle(cx + car_w - 5.0, tsy + car_h + 1.0, 2.0, BLACK);
             }
-            // "S8" Liniennummer wird im UI-Pass crisp gerendert
+        }
+
+        // S-Bahn-Übergangs-Overlay (vor allem darüber — kommt aber im UI-Pass)
+
+        // --- NPC-Pkw ---
+        let tod_now = time_of_day(self.game_seconds);
+        let is_night_pkw = tod_now == TimeOfDay::Nacht || tod_now == TimeOfDay::Abend;
+        for c in &self.cars {
+            let (csx, csy) = self.cam.world_to_screen(c.x, c.y);
+            // Schatten
+            draw_rectangle(csx + 1.0, csy + 11.0, 18.0, 2.0, Color::new(0.0, 0.0, 0.0, 0.35));
+            // Karosserie
+            draw_rectangle(csx, csy, 20.0, 11.0, c.body);
+            // Dachhaube (etwas dunkler)
+            let mut roof = c.body;
+            roof.r *= 0.75; roof.g *= 0.75; roof.b *= 0.75;
+            draw_rectangle(csx + 4.0, csy + 2.0, 12.0, 5.0, roof);
+            // Front-/Heckscheibe
+            draw_rectangle(csx + 5.0, csy + 3.0, 5.0, 3.5, Color::new(0.30, 0.40, 0.55, 1.0));
+            draw_rectangle(csx + 11.0, csy + 3.0, 4.0, 3.5, Color::new(0.30, 0.40, 0.55, 1.0));
+            // Räder
+            draw_circle(csx + 4.0, csy + 11.0, 1.8, BLACK);
+            draw_circle(csx + 16.0, csy + 11.0, 1.8, BLACK);
+            // Scheinwerfer bei Nacht
+            if is_night_pkw {
+                let (hx, cdx) = match c.dir {
+                    CarDir::East => (csx + 19.0, 22.0_f32),
+                    CarDir::West => (csx + 1.0, -22.0_f32),
+                };
+                draw_circle(hx, csy + 5.0, 1.5, Color::new(1.0, 0.95, 0.65, 1.0));
+                draw_triangle(
+                    macroquad::math::vec2(hx, csy + 2.0),
+                    macroquad::math::vec2(hx, csy + 8.0),
+                    macroquad::math::vec2(hx + cdx, csy + 5.0),
+                    Color::new(1.0, 0.95, 0.60, 0.20),
+                );
+            }
+            // Bremslicht beim Stoppen
+            if c.current_v.abs() < 5.0 {
+                let bx = match c.dir { CarDir::East => csx + 1.0, CarDir::West => csx + 18.0 };
+                draw_rectangle(bx, csy + 4.0, 1.0, 3.0, Color::new(1.0, 0.20, 0.10, 1.0));
+            }
         }
 
         // --- Busse ---
@@ -2635,48 +2679,100 @@ impl Game {
     /// Texte werden im UI-Pass gerendert (siehe `draw_world_labels`) — dort
     /// nativ in Bildschirmauflösung für gestochen scharfe Lesbarkeit.
     fn draw_decorations(&self) {
-        // --- S-Bahn-Gleise quer über die Karte zeichnen ---
+        // --- S-Bahn-Gleise (nur östlich vom See, ab TRAIN_TRACK_X_MIN) ---
         let track_world_y = TRAIN_TRACK_TILE_Y as f32 * TILE_SIZE;
-        let tx0 = (self.cam.x / TILE_SIZE) as i32 - 2;
-        let tx1 = ((self.cam.x + VIRTUAL_W as f32) / TILE_SIZE) as i32 + 2;
-        // Schotter-Streifen
-        let (_, gsy) = self.cam.world_to_screen(0.0, track_world_y - 2.0);
-        let (gsx_l, _) = self.cam.world_to_screen(tx0 as f32 * TILE_SIZE, 0.0);
-        let (gsx_r, _) = self.cam.world_to_screen(tx1 as f32 * TILE_SIZE, 0.0);
-        draw_rectangle(
-            gsx_l,
-            gsy,
-            gsx_r - gsx_l,
-            18.0,
-            Color::new(0.45, 0.40, 0.32, 1.0),
-        );
-        // Schwellen
-        for tx in tx0.max(0)..tx1 {
-            let (sx, sy) = self.cam.world_to_screen(tx as f32 * TILE_SIZE, track_world_y);
-            for s_off in 0..4 {
-                let sxx = sx + s_off as f32 * 4.0;
-                draw_rectangle(sxx, sy + 1.0, 2.5, 14.0, Color::new(0.25, 0.18, 0.10, 1.0));
+        let cam_tx0 = (self.cam.x / TILE_SIZE) as i32 - 2;
+        let cam_tx1 = ((self.cam.x + VIRTUAL_W as f32) / TILE_SIZE) as i32 + 2;
+        let tx0 = cam_tx0.max(TRAIN_TRACK_X_MIN);
+        let tx1 = cam_tx1.min(MAP_W);
+        if tx1 > tx0 {
+            let (_, gsy) = self.cam.world_to_screen(0.0, track_world_y - 2.0);
+            let (gsx_l, _) = self.cam.world_to_screen(tx0 as f32 * TILE_SIZE, 0.0);
+            let (gsx_r, _) = self.cam.world_to_screen(tx1 as f32 * TILE_SIZE, 0.0);
+            // Schotter-Streifen
+            draw_rectangle(gsx_l, gsy, gsx_r - gsx_l, 18.0,
+                Color::new(0.45, 0.40, 0.32, 1.0));
+            // Schwellen
+            for tx in tx0..tx1 {
+                let (sx, sy) = self.cam.world_to_screen(tx as f32 * TILE_SIZE, track_world_y);
+                for s_off in 0..4 {
+                    let sxx = sx + s_off as f32 * 4.0;
+                    draw_rectangle(sxx, sy + 1.0, 2.5, 14.0,
+                        Color::new(0.25, 0.18, 0.10, 1.0));
+                }
             }
+            // Zwei Schienen
+            let (_, rsy_top) = self.cam.world_to_screen(0.0, track_world_y + 3.0);
+            let (_, rsy_bot) = self.cam.world_to_screen(0.0, track_world_y + 11.0);
+            draw_rectangle(gsx_l, rsy_top, gsx_r - gsx_l, 1.5,
+                Color::new(0.75, 0.75, 0.78, 1.0));
+            draw_rectangle(gsx_l, rsy_bot, gsx_r - gsx_l, 1.5,
+                Color::new(0.75, 0.75, 0.78, 1.0));
         }
-        // Zwei Schienen
-        let (_, rsy_top) = self.cam.world_to_screen(0.0, track_world_y + 3.0);
-        let (_, rsy_bot) = self.cam.world_to_screen(0.0, track_world_y + 11.0);
-        draw_rectangle(gsx_l, rsy_top, gsx_r - gsx_l, 1.5,
-            Color::new(0.75, 0.75, 0.78, 1.0));
-        draw_rectangle(gsx_l, rsy_bot, gsx_r - gsx_l, 1.5,
-            Color::new(0.75, 0.75, 0.78, 1.0));
 
-        // --- Bahnsteig sichtbar machen (zwischen Gleisen und Straße) ---
+        // --- Bahnsteige für beide Stationen (Harthaus + Germering) ---
         let (_, psy) = self.cam.world_to_screen(0.0, TRAIN_PLATFORM_TILE_Y as f32 * TILE_SIZE);
-        let bahn_x0 = 92.0 * TILE_SIZE;
-        let bahn_x1 = 128.0 * TILE_SIZE;
-        let (psx_l, _) = self.cam.world_to_screen(bahn_x0, 0.0);
-        let (psx_r, _) = self.cam.world_to_screen(bahn_x1, 0.0);
-        draw_rectangle(psx_l, psy, psx_r - psx_l, 16.0,
-            Color::new(0.72, 0.72, 0.74, 1.0));
-        // Gelbe Sicherheitslinie am Bahnsteig
-        draw_rectangle(psx_l, psy + 1.0, psx_r - psx_l, 2.0,
-            Color::new(1.0, 0.85, 0.15, 1.0));
+        for station_idx in 0..2usize {
+            let (bahn_x0, bahn_x1) = station_platform(station_idx);
+            let (psx_l, _) = self.cam.world_to_screen(bahn_x0, 0.0);
+            let (psx_r, _) = self.cam.world_to_screen(bahn_x1, 0.0);
+            if psx_r < 0.0 || psx_l > VIRTUAL_W as f32 { continue; }
+            draw_rectangle(psx_l, psy, psx_r - psx_l, 16.0,
+                Color::new(0.72, 0.72, 0.74, 1.0));
+            // Gelbe Sicherheitslinie am Bahnsteig
+            draw_rectangle(psx_l, psy + 1.0, psx_r - psx_l, 2.0,
+                Color::new(1.0, 0.85, 0.15, 1.0));
+            // Bank am Bahnsteig
+            draw_rectangle(psx_l + 6.0, psy + 8.0, 12.0, 2.0,
+                Color::new(0.45, 0.30, 0.18, 1.0));
+        }
+
+        // --- Ampelmasten an allen Lichtkreuzungen ---
+        let red = light_is_red_for_horizontal(self.traffic_phase_t);
+        let yellow = {
+            let p = self.traffic_phase_t.rem_euclid(14.0);
+            (6.0..7.0).contains(&p) || (13.0..14.0).contains(&p)
+        };
+        for &(lx, ly) in TRAFFIC_LIGHT_TILES.iter() {
+            // Mast steht neben der Kreuzung — rechts vom Sidewalk
+            let wx = lx as f32 * TILE_SIZE + 16.0;
+            let wy = ly as f32 * TILE_SIZE - 16.0;
+            let (sx, sy) = self.cam.world_to_screen(wx, wy);
+            if sx < -16.0 || sx > VIRTUAL_W as f32 + 16.0
+                || sy < -32.0 || sy > VIRTUAL_H as f32 + 16.0
+            {
+                continue;
+            }
+            // Mast (vertikal)
+            draw_rectangle(sx + 1.0, sy + 4.0, 1.5, 14.0,
+                Color::new(0.18, 0.18, 0.22, 1.0));
+            // Lichterkasten
+            draw_rectangle(sx, sy, 4.0, 9.0,
+                Color::new(0.10, 0.10, 0.12, 1.0));
+            // Rotes Licht (oben)
+            let r_on = red;
+            let y_on = yellow;
+            let g_on = !red && !yellow;
+            draw_circle(sx + 2.0, sy + 1.5, 0.9,
+                if r_on { Color::new(1.0, 0.20, 0.10, 1.0) } else { Color::new(0.30, 0.05, 0.05, 1.0) });
+            draw_circle(sx + 2.0, sy + 4.0, 0.9,
+                if y_on { Color::new(1.0, 0.85, 0.15, 1.0) } else { Color::new(0.35, 0.30, 0.05, 1.0) });
+            draw_circle(sx + 2.0, sy + 6.5, 0.9,
+                if g_on { Color::new(0.30, 0.95, 0.30, 1.0) } else { Color::new(0.05, 0.25, 0.05, 1.0) });
+        }
+
+        // --- Stau-Markierung über betroffener Strasse ---
+        if self.traffic_jam_t > 0.0 {
+            let y = self.traffic_jam_road_y;
+            let (sx0, sy) = self.cam.world_to_screen(self.cam.x, y - 4.0);
+            // schimmernder Streifen
+            let alpha = (self.game_seconds * 6.0).sin().abs() * 0.18 + 0.10;
+            let _ = sx0;
+            draw_rectangle(
+                0.0, sy, VIRTUAL_W as f32, 24.0,
+                Color::new(1.0, 0.20, 0.10, alpha),
+            );
+        }
 
         // --- Echte Germering-Gebäude-Details auf der Building-Schicht ---
         self.draw_building_details();
@@ -2783,104 +2879,328 @@ impl Game {
         self.draw_park();
     }
 
-    /// Zeichnet Gebäudedetails pro Gebäude-Block. Dächer werden EINMAL pro
-    /// zusammenhängendem Block gezeichnet, nicht pro Tile — sieht sauberer aus.
+    /// Zeichnet jedes Gebäude einmal als zusammenhängendes Ganzes — Dachform,
+    /// Fenstermuster und Farbpalette hängen von BuildingKind ab. So sieht
+    /// jede Häuserzeile anders aus.
     fn draw_building_details(&self) {
-        let tx0 = (self.cam.x / TILE_SIZE) as i32 - 1;
-        let ty0 = (self.cam.y / TILE_SIZE) as i32 - 1;
-        let tx1 = ((self.cam.x + VIRTUAL_W as f32) / TILE_SIZE) as i32 + 2;
-        let ty1 = ((self.cam.y + VIRTUAL_H as f32) / TILE_SIZE) as i32 + 2;
+        let cam_x = self.cam.x;
+        let cam_y = self.cam.y;
 
-        // Pro Tile: ist es die oberste Reihe eines Gebäudes (Tile darüber kein Building)?
-        // Dann: zeichne Dachstreifen so breit wie das Gebäude.
-        for y in ty0.max(0)..ty1.min(self.world.h) {
-            for x in tx0.max(0)..tx1.min(self.world.w) {
-                if self.world.get(x, y) != crate::world::Tile::Building {
-                    continue;
-                }
-                let top_is_bldg = y > 0
-                    && self.world.get(x, y - 1) == crate::world::Tile::Building;
-                let left_is_bldg = x > 0
-                    && self.world.get(x - 1, y) == crate::world::Tile::Building;
-                let bottom_is_bldg = self.world.get(x, y + 1) == crate::world::Tile::Building;
-                let bottom_walk = !bottom_is_bldg
-                    && self.world.get(x, y + 1).walkable();
-
-                let (sx, sy) = self.cam.world_to_screen(
-                    x as f32 * TILE_SIZE,
-                    y as f32 * TILE_SIZE,
-                );
-
-                // Wand-Fassadenfarbe (deterministisch pro Gebäude-Spalte)
-                let block_id = self.find_building_left(x, y);
-                let wall_col = match block_id % 4 {
-                    0 => Color::new(0.78, 0.66, 0.50, 1.0), // beige
-                    1 => Color::new(0.72, 0.60, 0.46, 1.0), // sand
-                    2 => Color::new(0.82, 0.72, 0.58, 1.0), // hell
-                    _ => Color::new(0.66, 0.54, 0.40, 1.0), // dunkel
-                };
-                draw_rectangle(sx, sy, 16.0, 16.0, wall_col);
-
-                // Fenster (oben mittig im Tile)
-                if top_is_bldg && !bottom_walk {
-                    // Reihe in der Mitte des Gebäudes — 2 Fenster
-                    draw_rectangle(sx + 2.0, sy + 5.0, 4.0, 5.0,
-                        Color::new(0.30, 0.40, 0.55, 1.0));
-                    draw_rectangle(sx + 10.0, sy + 5.0, 4.0, 5.0,
-                        Color::new(0.30, 0.40, 0.55, 1.0));
-                    // Fenstersprosse
-                    draw_rectangle(sx + 3.8, sy + 5.0, 0.4, 5.0, wall_col);
-                    draw_rectangle(sx + 11.8, sy + 5.0, 0.4, 5.0, wall_col);
-                }
-
-                // Oberste Reihe → Dach drüber
-                if !top_is_bldg {
-                    let roof_col = match block_id % 3 {
-                        0 => Color::new(0.55, 0.18, 0.12, 1.0), // ziegelrot
-                        1 => Color::new(0.45, 0.22, 0.12, 1.0), // dunkelrot
-                        _ => Color::new(0.36, 0.30, 0.22, 1.0), // braun
-                    };
-                    // Dachfläche
-                    draw_rectangle(sx, sy, 16.0, 4.0, roof_col);
-                    // Dachfirst-Schatten
-                    draw_rectangle(sx, sy + 3.5, 16.0, 1.0,
-                        Color::new(0.18, 0.10, 0.08, 1.0));
-                    // Dach-Schornstein (nur am linken Rand des Blocks)
-                    if !left_is_bldg {
-                        draw_rectangle(sx + 11.0, sy - 3.0, 2.5, 3.0,
-                            Color::new(0.32, 0.18, 0.12, 1.0));
-                        draw_rectangle(sx + 11.0, sy - 4.0, 2.5, 1.0,
-                            Color::new(0.20, 0.20, 0.20, 1.0));
-                    }
-                    // Fenster unter dem Dach
-                    draw_rectangle(sx + 3.0, sy + 7.0, 3.0, 4.0,
-                        Color::new(0.30, 0.40, 0.55, 1.0));
-                    draw_rectangle(sx + 10.0, sy + 7.0, 3.0, 4.0,
-                        Color::new(0.30, 0.40, 0.55, 1.0));
-                }
-
-                // Erdgeschoss-Tür auf der walkable Seite
-                if bottom_walk {
-                    let dsx = sx + 6.0;
-                    let dsy = sy + 9.0;
-                    draw_rectangle(dsx, dsy, 4.0, 7.0,
-                        Color::new(0.32, 0.18, 0.10, 1.0));
-                    draw_rectangle(dsx + 0.5, dsy + 0.5, 3.0, 6.0,
-                        Color::new(0.45, 0.25, 0.14, 1.0));
-                    draw_circle(dsx + 3.2, dsy + 4.0, 0.5,
-                        Color::new(1.0, 0.85, 0.15, 1.0));
-                }
+        for b in &self.world.buildings {
+            // Welt-Pixel-Bereich
+            let bx = b.x as f32 * TILE_SIZE;
+            let by = b.y as f32 * TILE_SIZE;
+            let bw = b.w as f32 * TILE_SIZE;
+            let bh = b.h as f32 * TILE_SIZE;
+            // Off-Screen-Check (großzügig)
+            if bx + bw < cam_x - 16.0 || bx > cam_x + VIRTUAL_W as f32 + 16.0
+                || by + bh < cam_y - 32.0 || by > cam_y + VIRTUAL_H as f32 + 16.0
+            {
+                continue;
             }
+            let (sx, sy) = self.cam.world_to_screen(bx, by);
+            self.draw_one_building(b, sx, sy, bw, bh);
         }
     }
 
-    /// Sucht den linken Rand eines Gebäudeblocks → liefert dessen X als ID.
-    fn find_building_left(&self, x: i32, y: i32) -> i32 {
-        let mut xi = x;
-        while xi > 0 && self.world.get(xi - 1, y) == crate::world::Tile::Building {
-            xi -= 1;
+    /// Rendert ein einzelnes Gebäude. Die Wand-Tile darunter ist bereits in
+    /// `draw_world` gefüllt (TILE_BUILDING); hier kommt die obere Schicht
+    /// (Dach, Fassade, Fenster, Tür).
+    fn draw_one_building(
+        &self,
+        b: &crate::world::Building,
+        sx: f32, sy: f32,
+        bw: f32, bh: f32,
+    ) {
+        use crate::world::BuildingKind as BK;
+        let seed = b.seed;
+
+        // Hilfsfunktion: deterministischer Pick aus einer Liste anhand seed
+        let pick = |bucket: u32, n: usize| -> usize {
+            ((seed.wrapping_mul(31).wrapping_add(bucket)) as usize) % n.max(1)
+        };
+
+        // Farbpalette pro Gebäudeart
+        let (wall_col, roof_col, accent) = match b.kind {
+            BK::House => {
+                let walls = [
+                    Color::new(0.92, 0.88, 0.78, 1.0),
+                    Color::new(0.85, 0.78, 0.65, 1.0),
+                    Color::new(0.78, 0.66, 0.50, 1.0),
+                    Color::new(0.95, 0.90, 0.82, 1.0),
+                ];
+                let roofs = [
+                    Color::new(0.55, 0.18, 0.12, 1.0),
+                    Color::new(0.45, 0.22, 0.12, 1.0),
+                    Color::new(0.70, 0.30, 0.20, 1.0),
+                ];
+                (walls[pick(1, walls.len())], roofs[pick(2, roofs.len())],
+                 Color::new(0.30, 0.20, 0.10, 1.0))
+            }
+            BK::Reihenhaus => (
+                [
+                    Color::new(0.72, 0.60, 0.46, 1.0),
+                    Color::new(0.82, 0.72, 0.58, 1.0),
+                    Color::new(0.66, 0.54, 0.40, 1.0),
+                ][pick(1, 3)],
+                Color::new(0.45, 0.22, 0.12, 1.0),
+                Color::new(0.30, 0.20, 0.10, 1.0),
+            ),
+            BK::Apartment => (
+                Color::new(0.80, 0.78, 0.72, 1.0),
+                Color::new(0.36, 0.30, 0.22, 1.0),
+                Color::new(0.20, 0.20, 0.20, 1.0),
+            ),
+            BK::Highrise => (
+                [
+                    Color::new(0.75, 0.78, 0.82, 1.0),
+                    Color::new(0.68, 0.72, 0.78, 1.0),
+                    Color::new(0.82, 0.82, 0.86, 1.0),
+                ][pick(1, 3)],
+                Color::new(0.40, 0.40, 0.44, 1.0),
+                Color::new(0.18, 0.18, 0.20, 1.0),
+            ),
+            BK::Shop => (
+                [
+                    Color::new(0.95, 0.92, 0.85, 1.0),
+                    Color::new(0.90, 0.86, 0.80, 1.0),
+                ][pick(1, 2)],
+                Color::new(0.30, 0.30, 0.34, 1.0),
+                Color::new(0.85, 0.18, 0.18, 1.0),
+            ),
+            BK::Industrial => (
+                Color::new(0.65, 0.65, 0.68, 1.0),
+                Color::new(0.50, 0.50, 0.55, 1.0),
+                Color::new(0.95, 0.55, 0.20, 1.0),
+            ),
+            BK::Rathaus => (
+                Color::new(0.95, 0.88, 0.72, 1.0),
+                Color::new(0.45, 0.20, 0.18, 1.0),
+                Color::new(1.0, 0.85, 0.15, 1.0),
+            ),
+            BK::Schule => (
+                Color::new(0.95, 0.92, 0.85, 1.0),
+                Color::new(0.55, 0.22, 0.15, 1.0),
+                Color::new(0.85, 0.18, 0.18, 1.0),
+            ),
+            BK::Krankenhaus => (
+                Color::new(0.98, 0.98, 0.98, 1.0),
+                Color::new(0.85, 0.85, 0.88, 1.0),
+                Color::new(0.85, 0.18, 0.18, 1.0),
+            ),
+            BK::Tankstelle => (
+                Color::new(0.95, 0.92, 0.85, 1.0),
+                Color::new(0.20, 0.50, 0.30, 1.0),
+                Color::new(1.0, 0.85, 0.15, 1.0),
+            ),
+            BK::Ruin => (
+                Color::new(0.55, 0.50, 0.40, 1.0),
+                Color::new(0.35, 0.30, 0.25, 1.0),
+                Color::new(0.25, 0.20, 0.15, 1.0),
+            ),
+            BK::Kirche => (
+                Color::new(0.85, 0.80, 0.70, 1.0),
+                Color::new(0.40, 0.20, 0.12, 1.0),
+                Color::new(1.0, 0.85, 0.15, 1.0),
+            ),
+        };
+
+        // 1) Wand-Fassade
+        draw_rectangle(sx, sy + 4.0, bw, bh - 4.0, wall_col);
+        // Schatten am Fuß
+        draw_rectangle(sx, sy + bh - 1.0, bw, 1.0, Color::new(0.0, 0.0, 0.0, 0.35));
+
+        // 2) Dach — Form je nach Art
+        match b.kind {
+            BK::Highrise | BK::Apartment | BK::Industrial | BK::Krankenhaus | BK::Tankstelle => {
+                // Flachdach
+                draw_rectangle(sx, sy, bw, 4.5, roof_col);
+                draw_rectangle(sx, sy + 3.5, bw, 1.0, Color::new(0.10, 0.10, 0.12, 1.0));
+            }
+            BK::Shop => {
+                draw_rectangle(sx, sy, bw, 5.0, roof_col);
+                // Markise (Akzentfarbe)
+                draw_rectangle(sx, sy + 5.0, bw, 2.0, accent);
+            }
+            BK::Rathaus | BK::Schule | BK::Kirche => {
+                // Satteldach mit „Mittelturm"
+                draw_rectangle(sx, sy + 1.0, bw, 5.0, roof_col);
+                let tower_w = 6.0;
+                let tower_x = sx + bw * 0.5 - tower_w * 0.5;
+                draw_rectangle(tower_x, sy - 10.0, tower_w, 14.0, wall_col);
+                draw_triangle(
+                    macroquad::math::vec2(tower_x - 1.0, sy - 10.0),
+                    macroquad::math::vec2(tower_x + tower_w + 1.0, sy - 10.0),
+                    macroquad::math::vec2(tower_x + tower_w * 0.5, sy - 18.0),
+                    roof_col,
+                );
+                // Akzent (Uhr / Glocke / Wappen)
+                draw_rectangle(tower_x + 1.5, sy - 7.0, tower_w - 3.0, 2.5, accent);
+            }
+            BK::House | BK::Reihenhaus => {
+                // Satteldach — Dreieck oben drauf
+                draw_rectangle(sx, sy + 2.0, bw, 4.0, roof_col);
+                draw_triangle(
+                    macroquad::math::vec2(sx, sy + 2.5),
+                    macroquad::math::vec2(sx + bw, sy + 2.5),
+                    macroquad::math::vec2(sx + bw * 0.5, sy - 3.0),
+                    roof_col,
+                );
+                // Schornstein an einem Rand (deterministisch)
+                if pick(7, 2) == 0 {
+                    draw_rectangle(sx + bw * 0.75, sy - 5.0, 2.2, 4.0,
+                        Color::new(0.32, 0.18, 0.12, 1.0));
+                    draw_rectangle(sx + bw * 0.75, sy - 6.0, 2.2, 1.0,
+                        Color::new(0.20, 0.20, 0.20, 1.0));
+                }
+            }
+            BK::Ruin => {
+                // gezackte Wand-Oberkante (zerfallenes Dach)
+                let segs = (bw / 4.0) as i32;
+                for s in 0..segs {
+                    let h = if (s + (seed as i32) % 7) % 3 == 0 { 2.0 } else { 5.0 };
+                    let x = sx + s as f32 * 4.0;
+                    draw_rectangle(x, sy + 4.0 - h, 4.0, h, wall_col);
+                }
+            }
         }
-        xi
+
+        // 3) Fenster — pro Art unterschiedliches Raster
+        match b.kind {
+            BK::Ruin => {} // keine Fenster in Ruine
+            BK::Tankstelle => {
+                // Großes Vordach + zwei Säulen
+                draw_rectangle(sx + bw * 0.20, sy + bh - 12.0, bw * 0.60, 3.0, roof_col);
+                draw_rectangle(sx + bw * 0.22, sy + bh - 9.0, 1.5, 9.0, Color::new(0.5, 0.5, 0.55, 1.0));
+                draw_rectangle(sx + bw * 0.76, sy + bh - 9.0, 1.5, 9.0, Color::new(0.5, 0.5, 0.55, 1.0));
+                // Zapfsäulen
+                draw_rectangle(sx + bw * 0.30, sy + bh - 7.0, 3.0, 6.0, Color::new(0.10, 0.10, 0.12, 1.0));
+                draw_rectangle(sx + bw * 0.62, sy + bh - 7.0, 3.0, 6.0, Color::new(0.10, 0.10, 0.12, 1.0));
+                // großes Schaufenster
+                draw_rectangle(sx + 2.0, sy + 6.0, bw - 4.0, 5.0,
+                    Color::new(0.40, 0.55, 0.70, 1.0));
+            }
+            BK::Shop => {
+                // Großes Schaufenster über die ganze Fassade
+                let win_y = sy + 8.0;
+                let win_h = (bh - 14.0).max(3.0);
+                draw_rectangle(sx + 1.5, win_y, bw - 3.0, win_h,
+                    Color::new(0.45, 0.60, 0.78, 1.0));
+                // Sprossen alle 6px
+                let mut x = sx + 1.5;
+                while x < sx + bw - 1.5 {
+                    draw_rectangle(x, win_y, 0.4, win_h, wall_col);
+                    x += 6.0;
+                }
+            }
+            BK::Highrise => {
+                // Raster aus vielen kleinen Fenstern
+                let rows = (bh / 6.0) as i32;
+                let cols = (bw / 5.0) as i32;
+                for r in 1..rows {
+                    for c in 0..cols {
+                        let fx = sx + 1.0 + c as f32 * 5.0;
+                        let fy = sy + r as f32 * 5.0 + 1.0;
+                        let lit = ((r * 31 + c * 17 + seed as i32) % 7) == 0
+                            && time_of_day(self.game_seconds) == TimeOfDay::Nacht;
+                        let col = if lit {
+                            Color::new(1.0, 0.85, 0.45, 1.0)
+                        } else {
+                            Color::new(0.25, 0.35, 0.50, 1.0)
+                        };
+                        draw_rectangle(fx, fy, 3.0, 3.0, col);
+                    }
+                }
+            }
+            BK::Krankenhaus => {
+                // Rotes Kreuz prominent + Fensterreihen
+                let cx = sx + bw * 0.5;
+                let cy = sy + bh * 0.5;
+                draw_rectangle(cx - 1.5, cy - 5.0, 3.0, 10.0, accent);
+                draw_rectangle(cx - 5.0, cy - 1.5, 10.0, 3.0, accent);
+                let rows = (bh / 7.0) as i32;
+                let cols = (bw / 8.0) as i32;
+                for r in 1..rows {
+                    for c in 0..cols {
+                        let fx = sx + 2.0 + c as f32 * 8.0;
+                        let fy = sy + r as f32 * 7.0;
+                        if (fx - cx).abs() < 7.0 && (fy - cy).abs() < 7.0 { continue; }
+                        draw_rectangle(fx, fy, 5.0, 3.5,
+                            Color::new(0.45, 0.65, 0.85, 1.0));
+                    }
+                }
+            }
+            BK::Industrial => {
+                // Wenige große Tore + flache Fensterreihe
+                let tile_w = bw / 3.0;
+                for t in 0..3 {
+                    let x = sx + t as f32 * tile_w + 2.0;
+                    draw_rectangle(x, sy + bh - 9.0, tile_w - 4.0, 8.0,
+                        Color::new(0.40, 0.40, 0.45, 1.0));
+                    // Tor-Streifen
+                    for k in 0..4 {
+                        draw_rectangle(x, sy + bh - 9.0 + k as f32 * 2.0, tile_w - 4.0, 0.5,
+                            Color::new(0.25, 0.25, 0.28, 1.0));
+                    }
+                }
+                // Liniennummer-Schild oben
+                draw_rectangle(sx + 2.0, sy + 5.0, bw - 4.0, 2.0, accent);
+            }
+            BK::Apartment => {
+                // 3 Stockwerke à 3-4 Fenster
+                let cols = ((bw / 5.0) as i32).max(2);
+                let rows = ((bh / 6.0) as i32).max(2);
+                for r in 1..rows {
+                    for c in 0..cols {
+                        let fx = sx + 1.5 + c as f32 * (bw / cols as f32);
+                        let fy = sy + r as f32 * 5.0 + 1.0;
+                        let lit = ((r * 7 + c * 13 + seed as i32) % 5) == 0
+                            && time_of_day(self.game_seconds) == TimeOfDay::Nacht;
+                        let col = if lit {
+                            Color::new(1.0, 0.85, 0.45, 1.0)
+                        } else {
+                            Color::new(0.30, 0.40, 0.55, 1.0)
+                        };
+                        draw_rectangle(fx, fy, 3.0, 3.0, col);
+                        // Balkon-Andeutung
+                        if r == 2 && c < cols - 1 {
+                            draw_rectangle(fx - 1.0, fy + 3.5, 4.5, 0.6,
+                                Color::new(0.30, 0.20, 0.10, 1.0));
+                        }
+                    }
+                }
+            }
+            BK::Rathaus | BK::Schule | BK::Kirche => {
+                // Klassiches Fensterraster
+                let cols = ((bw / 5.0) as i32).max(2);
+                for c in 0..cols {
+                    let fx = sx + 2.0 + c as f32 * (bw - 4.0) / cols as f32;
+                    let fy = sy + bh - 9.0;
+                    draw_rectangle(fx, fy, 3.0, 5.0,
+                        Color::new(0.40, 0.55, 0.78, 1.0));
+                }
+            }
+            BK::House | BK::Reihenhaus => {
+                // 2 Fenster + Mitteltür
+                let win_y = sy + bh - 10.0;
+                draw_rectangle(sx + 2.0, win_y, 4.0, 4.0,
+                    Color::new(0.40, 0.55, 0.78, 1.0));
+                draw_rectangle(sx + bw - 6.0, win_y, 4.0, 4.0,
+                    Color::new(0.40, 0.55, 0.78, 1.0));
+            }
+        }
+
+        // 4) Tür (außer Ruin) — mittig unten
+        if !matches!(b.kind, BK::Ruin) {
+            let dsx = sx + bw * 0.5 - 2.0;
+            let dsy = sy + bh - 6.0;
+            draw_rectangle(dsx, dsy, 4.0, 6.0,
+                Color::new(0.32, 0.18, 0.10, 1.0));
+            draw_rectangle(dsx + 0.5, dsy + 0.5, 3.0, 5.0,
+                Color::new(0.45, 0.25, 0.14, 1.0));
+            draw_circle(dsx + 3.2, dsy + 3.0, 0.5,
+                Color::new(1.0, 0.85, 0.15, 1.0));
+        }
     }
 
     /// Stadtpark-Detail: Bäume + Bänke + Springbrunnen-Mosaik.
@@ -2924,28 +3244,52 @@ impl Game {
         let w2s = |wx: f32, wy: f32| self.cam.world_to_screen(wx, wy);
 
         // Schwebende Landmark-Schilder. Format: (world_center_x, world_y_unten, txt, fg, bg)
-        let signs: [(f32, f32, &str, Color, Color); 7] = [
+        let signs: [(f32, f32, &str, Color, Color); 12] = [
             (
-                88.0 * TILE_SIZE, 41.0 * TILE_SIZE,
+                81.0 * TILE_SIZE, 41.0 * TILE_SIZE,
                 "Stadthalle",
                 Color::new(1.0, 0.95, 0.85, 1.0),
                 Color::new(0.16, 0.24, 0.50, 1.0),
             ),
             (
-                115.0 * TILE_SIZE, 41.0 * TILE_SIZE,
+                103.0 * TILE_SIZE, 49.0 * TILE_SIZE,
+                "Rathaus Germering",
+                Color::new(1.0, 0.88, 0.30, 1.0),
+                Color::new(0.55, 0.18, 0.12, 1.0),
+            ),
+            (
+                127.0 * TILE_SIZE, 49.0 * TILE_SIZE,
+                "Schule",
+                Color::new(1.0, 1.0, 1.0, 1.0),
+                Color::new(0.55, 0.18, 0.12, 1.0),
+            ),
+            (
+                122.0 * TILE_SIZE, 62.0 * TILE_SIZE,
                 "Stadtmuseum ZEIT+RAUM",
                 Color::new(1.0, 0.88, 0.30, 1.0),
                 Color::new(0.40, 0.22, 0.10, 1.0),
             ),
             (
-                175.0 * TILE_SIZE, 76.0 * TILE_SIZE,
+                168.0 * TILE_SIZE, 51.0 * TILE_SIZE,
+                "Klinikum",
+                Color::new(0.85, 0.18, 0.18, 1.0),
+                Color::new(0.98, 0.98, 0.98, 1.0),
+            ),
+            (
+                178.0 * TILE_SIZE, 76.0 * TILE_SIZE,
                 "Polariom Eishalle",
                 Color::new(0.95, 0.98, 1.0, 1.0),
                 Color::new(0.20, 0.45, 0.70, 1.0),
             ),
             (
-                110.0 * TILE_SIZE, 3.0 * TILE_SIZE,
-                "S-Bahnhof S8",
+                120.0 * TILE_SIZE, 4.0 * TILE_SIZE,
+                "Bahnhof Germering S8",
+                Color::new(0.95, 0.98, 0.85, 1.0),
+                Color::new(0.06, 0.30, 0.10, 1.0),
+            ),
+            (
+                68.0 * TILE_SIZE, 5.0 * TILE_SIZE,
+                "Bahnhof Harthaus S8",
                 Color::new(0.95, 0.98, 0.85, 1.0),
                 Color::new(0.06, 0.30, 0.10, 1.0),
             ),
@@ -2956,16 +3300,22 @@ impl Game {
                 Color::new(0.18, 0.18, 0.22, 1.0),
             ),
             (
-                36.0 * TILE_SIZE, 41.0 * TILE_SIZE,
+                50.0 * TILE_SIZE, 41.0 * TILE_SIZE,
                 "GEP Einkaufspassagen",
                 Color::new(0.20, 0.18, 0.10, 1.0),
                 Color::new(1.0, 0.85, 0.15, 1.0),
             ),
             (
-                142.0 * TILE_SIZE, 49.0 * TILE_SIZE,
+                146.0 * TILE_SIZE, 49.0 * TILE_SIZE,
                 "Freibad Germering",
                 Color::new(0.95, 0.98, 1.0, 1.0),
                 Color::new(0.20, 0.55, 0.80, 1.0),
+            ),
+            (
+                192.0 * TILE_SIZE, 30.0 * TILE_SIZE,
+                "Tankstelle Cewestr.",
+                Color::new(0.20, 0.18, 0.10, 1.0),
+                Color::new(1.0, 0.85, 0.15, 1.0),
             ),
         ];
 
@@ -3217,6 +3567,36 @@ impl Game {
                     self.draw_interact_hints(ui);
                     if !self.save_message.is_empty() && self.save_message_t > 0.0 {
                         ui::draw_toast(ui, &self.save_message, Color::new(0.5, 1.0, 0.5, 1.0));
+                    }
+                    if !self.bus_ride_msg.is_empty() && self.bus_ride_msg_t > 0.0 {
+                        ui::draw_toast(ui, &self.bus_ride_msg, Color::new(1.0, 0.85, 0.30, 1.0));
+                    }
+                    // S-Bahn-Fahrt-Übergang
+                    if self.sbahn_ride_t > 0.0 {
+                        let pct = (self.sbahn_ride_t / 1.6).clamp(0.0, 1.0);
+                        // Fade-In dann Fade-Out
+                        let fade = if pct > 0.5 { (1.0 - pct) * 2.0 } else { 1.0 - pct * 2.0 + 1.0 };
+                        let alpha = fade.clamp(0.0, 1.0);
+                        ui.fullscreen_rect(Color::new(0.0, 0.0, 0.0, alpha * 0.92));
+                        let to = station_name(self.sbahn_ride_to);
+                        let s1 = format!("S8 → {}", to);
+                        let s2 = "Tür schließt automatisch.";
+                        let tw = ui.text_w(&s1, 22.0);
+                        ui.text(
+                            &s1,
+                            VIRTUAL_W as f32 / 2.0 - tw / 2.0,
+                            VIRTUAL_H as f32 / 2.0,
+                            22.0,
+                            Color::new(1.0, 0.85, 0.15, alpha),
+                        );
+                        let tw2 = ui.text_w(s2, 10.0);
+                        ui.text(
+                            s2,
+                            VIRTUAL_W as f32 / 2.0 - tw2 / 2.0,
+                            VIRTUAL_H as f32 / 2.0 + 18.0,
+                            10.0,
+                            Color::new(0.95, 0.95, 0.95, alpha),
+                        );
                     }
                 }
                 if self.minimap_open {
