@@ -6,7 +6,7 @@ authors = ["Max Huber, Bäckerlehrling"]
 description = "Germering Quest: Die Schimmel-Invasion — 2D Pixel-Art Open-World RPG"
 
 [dependencies]
-macroquad = "0.4"
+macroquad = { version = "0.4", features = ["audio"]}
 
 [profile.release]
 opt-level = 3
