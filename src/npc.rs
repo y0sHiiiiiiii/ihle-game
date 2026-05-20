@@ -43,7 +43,7 @@ impl Npc {
     pub fn klaus() -> Self {
         Self {
             kind: NpcKind::Klaus,
-            aabb: Aabb::new(101.0 * TILE_SIZE, 62.0 * TILE_SIZE, 14.0, 14.0),
+            aabb: Aabb::new(105.0 * TILE_SIZE, 51.0 * TILE_SIZE, 14.0, 14.0),
             name: "Stadtführer Klaus",
             dialog: vec![
                 "Grüß Gott! Klaus, Stadtführer.",
@@ -61,7 +61,7 @@ impl Npc {
     pub fn gerhard() -> Self {
         Self {
             kind: NpcKind::Gerhard,
-            aabb: Aabb::new(108.0 * TILE_SIZE, 20.0 * TILE_SIZE, 14.0, 14.0),
+            aabb: Aabb::new(114.0 * TILE_SIZE, 18.0 * TILE_SIZE, 14.0, 14.0),
             name: "Gerhard, S8-Fahrer",
             dialog: vec![
                 "Servus! Gerhard, S8 nach München.",

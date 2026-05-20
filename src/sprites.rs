@@ -778,6 +778,26 @@ pub const TILE_MOLD_SLOW: [&str; 16] = [
     "aaaaaaaaaaaaaaaa",
 ];
 
+/// Zebrastreifen — weiße Querstreifen auf grauer Straße.
+pub const TILE_ZEBRA: [&str; 16] = [
+    "cccccccccccccccc",
+    "cccccccccccccccc",
+    "llllllllllllllll",
+    "llllllllllllllll",
+    "cccccccccccccccc",
+    "cccccccccccccccc",
+    "llllllllllllllll",
+    "llllllllllllllll",
+    "cccccccccccccccc",
+    "cccccccccccccccc",
+    "llllllllllllllll",
+    "llllllllllllllll",
+    "cccccccccccccccc",
+    "cccccccccccccccc",
+    "llllllllllllllll",
+    "llllllllllllllll",
+];
+
 pub const TILE_BRUNNEN: [&str; 16] = [
     "................",
     ".....0ssss0.....",

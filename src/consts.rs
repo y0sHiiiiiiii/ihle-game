@@ -46,6 +46,10 @@ pub const PLAYER_NORMAL_FRICTION: f32 = 0.8;
 pub const AREA_STADTMITTE: &str = "Neugermering / Stadtmitte";
 pub const AREA_FRIEDENSTR: &str = "Friedenstraße";
 pub const AREA_BAHNHOF: &str = "Bahnhof Germering (S8)";
+pub const AREA_HARTHAUS: &str = "Bahnhof Harthaus (S8)";
+pub const AREA_RATHAUS: &str = "Rathausplatz";
+pub const AREA_SCHULE: &str = "Schule am Kirchenplatz";
+pub const AREA_KRANKENHAUS: &str = "Klinikum Germering";
 pub const AREA_GEP: &str = "GEP - Germering Einkaufspassagen";
 pub const AREA_CEWESTR: &str = "Cewestraße / Gewerbegebiet";
 pub const AREA_GERMSEE: &str = "Germeringer See (Baggersee)";
@@ -91,8 +95,8 @@ pub const FILIALEN: [Filiale; 4] = [
         name: "Ihle im GEP",
         adresse: "Münchner Straße 1",
         besonderheit: "Café-Atmosphäre - Sitzplätze heilen 1 Herz",
-        tile_x: 55,
-        tile_y: 60,
+        tile_x: 45,
+        tile_y: 67,
         discount_morgen: 0.0,
     },
     Filiale {
@@ -100,8 +104,8 @@ pub const FILIALEN: [Filiale; 4] = [
         name: "Ihle am S-Bahnhof",
         adresse: "Untere Bahnhofstr. 42",
         besonderheit: "Frühaufsteher: -20% vor 7 Uhr",
-        tile_x: 110,
-        tile_y: 18,
+        tile_x: 118,
+        tile_y: 26,
         discount_morgen: 0.20,
     },
     Filiale {
@@ -109,7 +113,7 @@ pub const FILIALEN: [Filiale; 4] = [
         name: "Ihle Gewerbegebiet",
         adresse: "Cewestraße 1",
         besonderheit: "Versteckte Menüpunkte - billigste Preise",
-        tile_x: 170,
+        tile_x: 168,
         tile_y: 28,
         discount_morgen: 0.0,
     },
@@ -309,21 +313,105 @@ pub const FILIALE_OPEN_HOURS: [(u8, u8); 4] = [
 
 /// Tile-Koordinaten der 4 Eckpunkte des Sees (im Wasser).
 pub const LAKE_CHECKPOINTS: [(i32, i32); 4] = [
-    (48, 8),   // Nordost-Ecke
-    (48, 36),  // Südost-Ecke
-    (8,  36),  // Südwest-Ecke
-    (8,  8),   // Nordwest-Ecke
+    (45, 25),  // Nordost-Ecke
+    (45, 52),  // Südost-Ecke
+    (10, 52),  // Südwest-Ecke
+    (10, 25),  // Nordwest-Ecke
 ];
 
 // --------------------------------------------------------------------
-//  S-Bahn
+//  S-Bahn — zwei echte Germering-Stationen: Harthaus (West) + Germering (Ost)
 // --------------------------------------------------------------------
 
 /// Sekunden zwischen Zugdurchfahrten (Spielzeit).
-pub const TRAIN_INTERVAL_SECONDS: f32 = 75.0;
-/// Dauer einer Zug-Durchfahrt.
-pub const TRAIN_DURATION: f32 = 4.5;
+pub const TRAIN_INTERVAL_SECONDS: f32 = 90.0;
 /// Y-Tile-Koordinate der S8-Gleise.
-pub const TRAIN_TRACK_TILE_Y: i32 = 16;
+pub const TRAIN_TRACK_TILE_Y: i32 = 14;
 /// Y-Tile-Koordinate des Bahnsteigs (hier landen die Münzen).
-pub const TRAIN_PLATFORM_TILE_Y: i32 = 18;
+pub const TRAIN_PLATFORM_TILE_Y: i32 = 17;
+/// Westlicher Streckenanfang — vor dem Bahnhof Harthaus.
+pub const TRAIN_TRACK_X_MIN: i32 = 55;
+/// Östliches Ende.
+pub const TRAIN_TRACK_X_MAX: i32 = 200;
+/// Bahnhof Harthaus (West) Halt-Position in Tile-X.
+pub const TRAIN_STATION_HARTHAUS_X: f32 = 68.0;
+/// Bahnhof Germering (Ost) Halt-Position in Tile-X.
+pub const TRAIN_STATION_GERMERING_X: f32 = 120.0;
+/// Bahnsteig-X-Bereich für Harthaus (für Bahnsteig-Rendering und Ride-Erkennung).
+pub const TRAIN_PLATFORM_HARTHAUS: (f32, f32) = (60.0, 78.0);
+/// Bahnsteig-X-Bereich für Germering Bahnhof.
+pub const TRAIN_PLATFORM_GERMERING: (f32, f32) = (112.0, 132.0);
+/// Sekunden Halt am Bahnhof.
+pub const TRAIN_STATION_DWELL: f32 = 5.0;
+/// Kosten in Münzen für eine S-Bahn-Fahrt zwischen den 2 Stationen.
+pub const SBAHN_RIDE_COST: u32 = 5;
+
+// --------------------------------------------------------------------
+//  Busse — echte Germering-Linien (851 + lokale Linien)
+// --------------------------------------------------------------------
+
+pub struct BusLine {
+    pub number: &'static str,
+    pub name: &'static str,
+}
+
+/// Echte Buslinien rund um Germering (MVV + lokale).
+pub const BUS_LINES: [BusLine; 5] = [
+    BusLine { number: "851", name: "Germering Bf - Puchheim" },
+    BusLine { number: "843", name: "Germering - Gilching" },
+    BusLine { number: "844", name: "Germering - Olching" },
+    BusLine { number: "X910", name: "Express Stadtmitte" },
+    BusLine { number: "732", name: "Schulbus Germering" },
+];
+
+/// Schaden, wenn ein Bus den Spieler überfährt.
+pub const BUS_DAMAGE: i32 = 1;
+
+/// Kosten in Münzen für eine Mitfahrt im Bus (Einstieg per [E]).
+pub const BUS_RIDE_COST: u32 = 10;
+
+// --------------------------------------------------------------------
+//  Auto-Verkehr (NPC-Pkw)
+// --------------------------------------------------------------------
+
+/// Schaden, wenn ein Auto den Spieler trifft.
+pub const CAR_DAMAGE: i32 = 1;
+/// Maximale gleichzeitig auf der Karte herumfahrende Autos.
+pub const CAR_MAX: usize = 18;
+
+// --------------------------------------------------------------------
+//  Ampeln & Zebrastreifen — Innerortsverkehr
+// --------------------------------------------------------------------
+
+/// Tile-Koordinaten der Ampel-Kreuzungen (X, Y) — Mitte der Kreuzung.
+/// Fahrzeuge auf der zugehörigen h_road halten bei Rot ca. 1 Tile vor dem Light.
+pub const TRAFFIC_LIGHT_TILES: [(i32, i32); 6] = [
+    (75, 40),   // GEP-Kreuzung
+    (105, 40),  // Stadtmitte Nord
+    (130, 40),  // Stadthalle/Stadtmuseum
+    (75, 60),   // Stadtmitte West
+    (105, 60),  // Stadtmitte Ost
+    (160, 60),  // Cewestr Übergang
+];
+
+/// Tile-Koordinaten der Zebrastreifen (X, Y) auf horizontalen Straßen.
+/// Fahrzeuge stoppen, wenn der Spieler innerhalb von ~2 Tiles ist.
+pub const ZEBRA_TILES: [(i32, i32); 12] = [
+    (50, 20),   // Nord Wohngebiet
+    (90, 20),   // Bahnhof Süd
+    (140, 20),  // Bahnhof Ost
+    (40, 40),   // GEP
+    (90, 40),   // Stadtmitte Nord
+    (120, 40),  // Museum
+    (165, 40),  // Cewestr
+    (50, 60),   // Parsberg
+    (90, 60),   // Stadtmitte West
+    (120, 60),  // Stadtmitte Ost
+    (90, 80),   // Friedenstr Süd
+    (140, 80),  // Polariom Nord
+];
+
+/// Sekunden zwischen zufälligen Stau-Ereignissen.
+pub const TRAFFIC_JAM_INTERVAL: f32 = 75.0;
+/// Sekunden, die ein Stau anhält.
+pub const TRAFFIC_JAM_DURATION: f32 = 18.0;

@@ -18,7 +18,7 @@ mod world;
 
 use audio::Audio;
 use boss::{Boss, BossPhase};
-use collision::Aabb;
+use collision::{move_aabb, Aabb};
 use consts::*;
 use entities::{
     spawn_world_entities, Coin, CoinKind, Enemy, EnemyKind, EnemyState, FloatingText, IcePatch,
@@ -106,9 +106,39 @@ struct Game {
     // --- Dungeon-Kristalle (Bitmask: bit0..3 für die 4 Kristalle) ---
     crystals: u8,
     // --- S-Bahn ---
-    train_t: f32,       // Sekunden bis zur nächsten Zugdurchfahrt
-    train_anim: f32,    // Animations-Fortschritt 0..TRAIN_DURATION (>0 = Zug fährt)
+    train_t: f32,           // Sekunden bis zur nächsten Durchfahrt
+    train_phase: TrainPhase,
+    train_x: f32,           // Welt-X-Position der Lok
+    train_dwell_t: f32,     // Restzeit Halt am Bahnhof
     train_dropped: bool,
+    train_dir: TrainDir,
+    train_next_stop: usize, // 0 = Harthaus, 1 = Germering
+    train_remaining_stops: u8, // Bitmaske der noch anzufahrenden Stationen in dieser Tour
+    // S-Bahn-Fahrt-Anim (kurzer Übergang beim "Reinhüpfen" in die Bahn)
+    sbahn_ride_t: f32,
+    sbahn_ride_from: usize,
+    sbahn_ride_to: usize,
+    // --- Busse ---
+    buses: Vec<Bus>,
+    bus_spawn_t: f32,
+    bus_hit_cooldown: f32,
+    bus_next_uid: u32,
+    bus_uids: Vec<u32>,         // parallel zu self.buses (UID je Bus)
+    riding_bus_uid: Option<u32>,// in welchem Bus sitzt der Spieler
+    bus_ride_msg_t: f32,
+    bus_ride_msg: String,
+    // --- Pkw ---
+    cars: Vec<Car>,
+    car_spawn_t: f32,
+    // --- Ampeln / Stau ---
+    traffic_phase_t: f32,        // 0..LIGHT_CYCLE_S Sekunden
+    traffic_jam_t: f32,          // Restzeit aktiver Stau
+    traffic_jam_road_y: f32,     // welcher h_road (Welt-Y) ist gestaut
+    traffic_jam_cooldown: f32,   // bis zum nächsten Stau
+    // --- Wandernde NPCs (Bürger + Säufer) ---
+    pedestrians: Vec<Pedestrian>,
+    // --- Pause-Menü-Cursor ---
+    pause_cursor: usize,
     // --- WWK-Sprung ---
     jump_t: f32,        // Restzeit aktiver Sprung
     // --- See-Schwimmstrecke ---
@@ -121,8 +151,186 @@ struct Game {
     // --- Klaus-Tour ---
     klaus_tour_done: bool,
     klaus_tour_t: f32,
+    klaus_started_walking: bool,
     // --- Floating Damage- / Coin-Texte ---
     floating_texts: Vec<FloatingText>,
+}
+
+// ------------------------------------------------------------------------
+//  S-Bahn-Phasen
+// ------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TrainPhase {
+    Idle,       // Wartet, nicht sichtbar
+    Entering,   // Fährt von links Richtung Bahnhof
+    Dwelling,   // Steht am Bahnsteig
+    Leaving,    // Fährt vom Bahnhof nach rechts ab
+}
+
+// ------------------------------------------------------------------------
+//  Busse — fahren auf horizontalen Straßen
+// ------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug)]
+enum BusDir { East, West }
+
+#[derive(Clone)]
+struct Bus {
+    line_idx: usize,    // Index in BUS_LINES
+    x: f32,
+    y: f32,             // Welt-Y (auf einer h_road)
+    dir: BusDir,
+    speed: f32,
+    swear_t: f32,       // Anzeigedauer der Schimpf-Sprechblase
+    swear_text: String,
+    honk_t: f32,        // Hupgeräusch-Indikator
+}
+
+impl Bus {
+    fn aabb(&self) -> Aabb {
+        Aabb::new(self.x + 1.0, self.y + 1.0, 28.0, 14.0)
+    }
+}
+
+// ------------------------------------------------------------------------
+//  Pkw — fahren auf horizontalen Straßen, halten an Ampeln & Zebras
+// ------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug)]
+enum CarDir { East, West }
+
+#[derive(Clone)]
+struct Car {
+    x: f32,
+    y: f32,
+    dir: CarDir,
+    speed: f32,         // Wunschgeschwindigkeit
+    current_v: f32,     // tatsächliche Geschwindigkeit (für Stopp/Anfahren)
+    body: Color,        // Karosseriefarbe
+    honk_t: f32,
+}
+
+impl Car {
+    fn aabb(&self) -> Aabb {
+        Aabb::new(self.x + 1.0, self.y + 2.0, 18.0, 10.0)
+    }
+}
+
+// ------------------------------------------------------------------------
+//  S-Bahn — Richtung + aktueller Haltepunkt
+// ------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TrainDir {
+    East,
+    West,
+}
+
+/// Liefert die Bahnsteig-Position eines Bahnhofs in Welt-X.
+fn station_x(idx: usize) -> f32 {
+    match idx {
+        0 => TRAIN_STATION_HARTHAUS_X * TILE_SIZE,
+        _ => TRAIN_STATION_GERMERING_X * TILE_SIZE,
+    }
+}
+
+/// Stationsname.
+fn station_name(idx: usize) -> &'static str {
+    match idx {
+        0 => "Harthaus",
+        _ => "Germering",
+    }
+}
+
+/// Bahnsteig-X-Bereich (Welt-Koordinaten).
+fn station_platform(idx: usize) -> (f32, f32) {
+    let (a, b) = match idx {
+        0 => TRAIN_PLATFORM_HARTHAUS,
+        _ => TRAIN_PLATFORM_GERMERING,
+    };
+    (a * TILE_SIZE, b * TILE_SIZE)
+}
+
+// ------------------------------------------------------------------------
+//  Ampel-Logik (rot-für-Horizontalverkehr-Fenster im 14s-Zyklus)
+// ------------------------------------------------------------------------
+
+/// 0..6 grün, 6..7 gelb, 7..13 rot, 13..14 gelb (zurück nach grün).
+fn light_is_red_for_horizontal(t: f32) -> bool {
+    let p = t.rem_euclid(14.0);
+    p >= 7.0 && p < 13.0
+}
+
+/// Hilfsfunktion für Fahrzeuge: sollte das Fahrzeug an Position (x,y) und
+/// Fahrtrichtung in Kürze halten? (Ampel rot, aktiver Zebrastreifen).
+///
+/// `length` = Fahrzeuglänge (Vorderkante = x + length wenn East, x wenn West)
+fn vehicle_should_stop(
+    x: f32,
+    y: f32,
+    dir_east: bool,
+    length: f32,
+    traffic_t: f32,
+    active_zebras: &[(f32, f32)],
+) -> bool {
+    let front_x = if dir_east { x + length } else { x };
+    let look_ahead = 28.0;
+
+    // 1) Ampeln
+    if light_is_red_for_horizontal(traffic_t) {
+        for &(lx, ly) in TRAFFIC_LIGHT_TILES.iter() {
+            let lwy = ly as f32 * TILE_SIZE;
+            if (lwy - y).abs() > 12.0 { continue; }
+            let lwx = lx as f32 * TILE_SIZE + 8.0;
+            let dist_ahead = if dir_east { lwx - front_x } else { front_x - lwx };
+            if dist_ahead > -4.0 && dist_ahead < look_ahead {
+                return true;
+            }
+        }
+    }
+
+    // 2) Zebrastreifen (Spieler bereits in der Nähe → aktiv)
+    for &(zwx, zwy) in active_zebras {
+        if (zwy - (y + 6.0)).abs() > 16.0 { continue; }
+        let dist_ahead = if dir_east { zwx - front_x } else { front_x - zwx };
+        if dist_ahead > -4.0 && dist_ahead < look_ahead {
+            return true;
+        }
+    }
+
+    false
+}
+
+// ------------------------------------------------------------------------
+//  Wandernde Bürger + Säufer
+// ------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PedKind {
+    /// Freundlicher Bürger — wandert herum.
+    Citizen,
+    /// Tagsüber besoffener Bayer — versucht den Spieler zu hauen.
+    Drunk,
+}
+
+#[derive(Clone)]
+struct Pedestrian {
+    kind: PedKind,
+    aabb: Aabb,
+    vx: f32,
+    vy: f32,
+    /// Aktueller Bewegungs-Timer; bei 0 wird neue Richtung gewählt.
+    wander_t: f32,
+    /// Cooldown für Berührungs-Schaden (nur Drunk).
+    hit_cool: f32,
+    /// Phase für Sprite-Wackeln.
+    phase: f32,
+    /// Anzeigte Schimpfwort-Restzeit.
+    bubble_t: f32,
+    bubble_text: String,
+    /// Optionales Outfit-Tönung (für Vielfalt).
+    tint: Color,
 }
 
 // ------------------------------------------------------------------------
@@ -172,6 +380,7 @@ async fn build_textures() -> Textures {
         tile_bossfloor: sprites::make_texture(&sprites::TILE_BOSSFLOOR),
         tile_moldslow: sprites::make_texture(&sprites::TILE_MOLD_SLOW),
         tile_brunnen: sprites::make_texture(&sprites::TILE_BRUNNEN),
+        tile_zebra: sprites::make_texture(&sprites::TILE_ZEBRA),
         crystal: sprites::make_texture(&sprites::CRYSTAL),
     }
 }
@@ -220,9 +429,33 @@ impl Game {
             save_message_t: 0.0,
             save_message: String::new(),
             crystals: 0,
-            train_t: TRAIN_INTERVAL_SECONDS,
-            train_anim: 0.0,
+            train_t: 8.0, // erste Durchfahrt nach 8s
+            train_phase: TrainPhase::Idle,
+            train_x: 0.0,
+            train_dwell_t: 0.0,
             train_dropped: false,
+            train_dir: TrainDir::East,
+            train_next_stop: 0,
+            train_remaining_stops: 0b11,
+            sbahn_ride_t: 0.0,
+            sbahn_ride_from: 0,
+            sbahn_ride_to: 1,
+            buses: Vec::new(),
+            bus_spawn_t: 5.0,
+            bus_hit_cooldown: 0.0,
+            bus_next_uid: 1,
+            bus_uids: Vec::new(),
+            riding_bus_uid: None,
+            bus_ride_msg_t: 0.0,
+            bus_ride_msg: String::new(),
+            cars: Vec::new(),
+            car_spawn_t: 3.0,
+            traffic_phase_t: 0.0,
+            traffic_jam_t: 0.0,
+            traffic_jam_road_y: 0.0,
+            traffic_jam_cooldown: TRAFFIC_JAM_INTERVAL,
+            pedestrians: spawn_pedestrians(),
+            pause_cursor: 0,
             jump_t: 0.0,
             lake_visited: 0,
             lake_swim_done: false,
@@ -231,6 +464,7 @@ impl Game {
             quest_hint: String::new(),
             klaus_tour_done: false,
             klaus_tour_t: 0.0,
+            klaus_started_walking: false,
             floating_texts: Vec::new(),
         }
     }
@@ -243,6 +477,11 @@ impl Game {
         self.ice_patches.clear();
         self.slow_tiles.clear();
         self.npcs = spawn_all_npcs();
+        self.pedestrians = spawn_pedestrians();
+        self.buses.clear();
+        self.bus_spawn_t = 5.0;
+        self.bus_hit_cooldown = 0.0;
+        self.pause_cursor = 0;
         self.boss = None;
         self.player = Player::new(100.0 * TILE_SIZE, 72.0 * TILE_SIZE);
         self.game_seconds = 0.0;
@@ -255,9 +494,25 @@ impl Game {
         self.victory_scroll = 0.0;
         self.boss_intro_seen = false;
         self.crystals = 0;
-        self.train_t = TRAIN_INTERVAL_SECONDS;
-        self.train_anim = 0.0;
+        self.train_t = 8.0;
+        self.train_phase = TrainPhase::Idle;
+        self.train_x = 0.0;
+        self.train_dwell_t = 0.0;
         self.train_dropped = false;
+        self.train_dir = TrainDir::East;
+        self.train_next_stop = 0;
+        self.train_remaining_stops = 0b11;
+        self.sbahn_ride_t = 0.0;
+        self.cars.clear();
+        self.car_spawn_t = 3.0;
+        self.bus_uids.clear();
+        self.bus_next_uid = 1;
+        self.riding_bus_uid = None;
+        self.bus_ride_msg.clear();
+        self.bus_ride_msg_t = 0.0;
+        self.traffic_phase_t = 0.0;
+        self.traffic_jam_t = 0.0;
+        self.traffic_jam_cooldown = TRAFFIC_JAM_INTERVAL;
         self.jump_t = 0.0;
         self.lake_visited = 0;
         self.lake_swim_done = false;
@@ -266,6 +521,7 @@ impl Game {
         self.quest_hint.clear();
         self.klaus_tour_done = false;
         self.klaus_tour_t = 0.0;
+        self.klaus_started_walking = false;
         self.floating_texts.clear();
     }
 
@@ -349,12 +605,30 @@ impl Game {
         self.interact_landmark_cooldown = (self.interact_landmark_cooldown - dt).max(0.0);
         self.attack_anim_t = (self.attack_anim_t - dt).max(0.0);
         self.quest_hint_t = (self.quest_hint_t - dt).max(0.0);
-        self.klaus_tour_t += dt;
+        // Klaus-Tour-Timer läuft nur, wenn er auch tatsächlich losgegangen ist.
+        if self.klaus_started_walking {
+            self.klaus_tour_t += dt;
+        }
 
+        // Ampeln + Stau-Events
+        self.tick_traffic_lights(dt);
+        self.tick_traffic_jam(dt);
         // S-Bahn-Zyklus
         self.tick_train(dt);
+        // Aktive S-Bahn-Fahrt (Übergang/Teleport)
+        self.tick_sbahn_ride(dt);
+        // Busse
+        self.tick_buses(dt);
+        // NPC-Pkw
+        self.tick_cars(dt);
+        // Wandernde Bürger + Säufer
+        self.tick_pedestrians(dt);
+        // Toast für Bus-Steig-Meldung
+        self.bus_ride_msg_t = (self.bus_ride_msg_t - dt).max(0.0);
+        if self.bus_ride_msg_t == 0.0 { self.bus_ride_msg.clear(); }
 
-        // Klaus läuft den Roten Faden ab, bis ihn jemand anspricht.
+        // Klaus wartet am Germarbrunnen, bis der Spieler nah genug ist.
+        // Erst dann startet seine Stadtführungs-Tour. So findet man ihn IMMER.
         if !self.klaus_tour_done {
             let (kx, ky) = self.klaus_position();
             for n in self.npcs.iter_mut() {
@@ -394,8 +668,15 @@ impl Game {
             self.audio.play_music("day", 0.35);
         }
 
-        // Player update
-        self.player.update(&self.world, dt);
+        // Player update — pausiert beim Mitfahren / während S-Bahn-Übergang
+        if self.riding_bus_uid.is_none() && self.sbahn_ride_t <= 0.0 {
+            self.player.update(&self.world, dt);
+        } else {
+            // Powerups laufen weiter, Input aber ignorieren
+            self.player.powerups.tick(dt);
+            self.player.attack_cooldown = (self.player.attack_cooldown - dt).max(0.0);
+            self.player.damage_flash = (self.player.damage_flash - dt).max(0.0);
+        }
         let (pcx, pcy) = self.player.center();
         self.cam.follow(pcx, pcy);
         self.cam.update_shake(dt, self.game_seconds);
@@ -418,7 +699,7 @@ impl Game {
                     if collected >= 4 {
                         self.boss = Some(Boss::new(
                             100.0 * TILE_SIZE - 22.0,
-                            95.0 * TILE_SIZE - 22.0,
+                            100.0 * TILE_SIZE - 22.0,
                         ));
                     } else {
                         self.area_name = format!(
@@ -656,12 +937,112 @@ impl Game {
             alive
         });
 
+        // === E-Aktionen mit Priorität: SBahn-Fahrt > Bus > NPCs > Filiale > Landmark ===
+        let e_pressed = is_key_pressed(KeyCode::E);
+
+        // Während aktiver S-Bahn-Fahrt: alle Interaktionen sperren
+        if self.sbahn_ride_t > 0.0 {
+            return;
+        }
+
+        // (1) Spieler steht auf Bahnsteig + Zug hält dort → E → Fahrt zum anderen Bahnhof
+        let mut e_consumed = false;
+        if e_pressed && self.train_phase == TrainPhase::Dwelling {
+            if let Some(plat_idx) = self.player_on_station_platform() {
+                if plat_idx == self.train_next_stop {
+                    if self.player.coins >= SBAHN_RIDE_COST {
+                        self.player.coins -= SBAHN_RIDE_COST;
+                        let to = 1 - plat_idx;
+                        self.start_sbahn_ride(plat_idx, to);
+                        self.area_name = format!(
+                            "S8 nach {} ({} M)",
+                            station_name(to), SBAHN_RIDE_COST
+                        );
+                        self.area_fade = 2.5;
+                        e_consumed = true;
+                    } else {
+                        self.area_name = format!(
+                            "Brauchst {} Münzen für die S8",
+                            SBAHN_RIDE_COST
+                        );
+                        self.area_fade = 2.0;
+                        e_consumed = true;
+                    }
+                }
+            }
+        }
+
+        // (2) Bus-Boarding / Aussteigen
+        if !e_consumed && e_pressed {
+            if let Some(_uid) = self.riding_bus_uid {
+                // Aussteigen — Spieler 1 Tile südlich vom Bus absetzen
+                if let Some(uid) = self.riding_bus_uid {
+                    if let Some(idx) = self.bus_uids.iter().position(|u| *u == uid) {
+                        let b = &self.buses[idx];
+                        self.player.aabb.x = b.x + 6.0;
+                        self.player.aabb.y = b.y + 18.0;
+                    }
+                }
+                self.riding_bus_uid = None;
+                self.bus_ride_msg = "Ausgestiegen.".to_string();
+                self.bus_ride_msg_t = 2.0;
+                self.audio.play_sfx(&self.audio.menu_select);
+                e_consumed = true;
+            } else {
+                // Einsteigen: irgendein Bus in Reichweite?
+                let mut best: Option<usize> = None;
+                let mut best_d2 = 28.0 * 28.0;
+                for (i, b) in self.buses.iter().enumerate() {
+                    let bcx = b.x + 14.0;
+                    let bcy = b.y + 8.0;
+                    let dx = self.player.aabb.x + 6.0 - bcx;
+                    let dy = self.player.aabb.y + 7.0 - bcy;
+                    let d2 = dx * dx + dy * dy;
+                    if d2 < best_d2 {
+                        best_d2 = d2;
+                        best = Some(i);
+                    }
+                }
+                if let Some(i) = best {
+                    if self.player.coins >= BUS_RIDE_COST {
+                        self.player.coins -= BUS_RIDE_COST;
+                        if let Some(&uid) = self.bus_uids.get(i) {
+                            self.riding_bus_uid = Some(uid);
+                            let line = BUS_LINES[self.buses[i].line_idx].number;
+                            self.bus_ride_msg = format!(
+                                "Linie {} - Mitfahrt ({} M)",
+                                line, BUS_RIDE_COST
+                            );
+                            self.bus_ride_msg_t = 2.5;
+                            self.audio.play_sfx(&self.audio.jingle);
+                        }
+                        e_consumed = true;
+                    } else {
+                        self.bus_ride_msg = format!(
+                            "Brauchst {} Münzen für die Mitfahrt",
+                            BUS_RIDE_COST
+                        );
+                        self.bus_ride_msg_t = 2.0;
+                        e_consumed = true;
+                    }
+                }
+            }
+        }
+
+        // Wenn der Spieler mitfährt → restliche Interaktionen sperren
+        if self.riding_bus_uid.is_some() {
+            return;
+        }
+
         // NPCs — Interaktion
         let mut start_dialog: Option<usize> = None;
-        for (i, npc) in self.npcs.iter().enumerate() {
-            if self.player.aabb.intersects(&npc.interact_zone()) && is_key_pressed(KeyCode::E) {
-                start_dialog = Some(i);
-                break;
+        if !e_consumed {
+            for (i, npc) in self.npcs.iter().enumerate() {
+                if self.player.aabb.intersects(&npc.interact_zone()) && e_pressed {
+                    start_dialog = Some(i);
+                    e_consumed = true;
+                    break;
+                }
             }
         }
         if let Some(i) = start_dialog {
@@ -681,7 +1062,7 @@ impl Game {
 
         // Ihle-Filiale betreten (E) — Öffnungszeiten beachten
         if let Some(idx) = filiale_at(self.player.aabb.x, self.player.aabb.y) {
-            if is_key_pressed(KeyCode::E) {
+            if e_pressed && !e_consumed {
                 if filiale_is_open(idx, self.game_seconds) {
                     self.checkpoint_filiale = idx;
                     self.shop = Some(ShopState::new(idx));
@@ -700,12 +1081,12 @@ impl Game {
         }
 
         // Landmark-Interaktion (E auf Brunnen-Tile in Nähe)
-        if self.interact_landmark_cooldown <= 0.0 && is_key_pressed(KeyCode::E) {
+        if self.interact_landmark_cooldown <= 0.0 && e_pressed && !e_consumed {
             let landmarks: &[((i32, i32), &str)] = &[
-                ((100, 60), "germar"),
+                ((105, 50), "germar"),
                 ((115, 35), "jakobus"),
                 ((85, 65), "marien"),
-                ((8, 50), "ziegel"),
+                ((8, 54), "ziegel"),
                 ((20, 105), "cordobar"),
             ];
             for &((lx, ly), id) in landmarks {
@@ -719,12 +1100,12 @@ impl Game {
             }
         }
 
-        // Museum betreten (Punktposition)
-        let museum_dx = pcx - 115.0 * TILE_SIZE;
-        let museum_dy = pcy - 58.0 * TILE_SIZE;
+        // Museum betreten (Punktposition) — neue Position passend zum Rework
+        let museum_dx = pcx - 122.0 * TILE_SIZE;
+        let museum_dy = pcy - 67.0 * TILE_SIZE;
         if !self.roman_artifact
-            && museum_dx * museum_dx + museum_dy * museum_dy < 24.0 * 24.0
-            && is_key_pressed(KeyCode::E)
+            && museum_dx * museum_dx + museum_dy * museum_dy < 28.0 * 28.0
+            && e_pressed && !e_consumed
         {
             self.roman_artifact = true;
             self.player.powerups.attack_bonus = 1;
@@ -793,53 +1174,610 @@ impl Game {
         }
     }
 
-    /// S-Bahn-Timer + Münzregen am Bahnhof.
+    /// S-Bahn: fährt zwei Bahnhöfe nacheinander an (Harthaus + Germering),
+    /// abwechselnd in Ost- und Westrichtung. Münzen droppen am Halt.
     fn tick_train(&mut self, dt: f32) {
-        if self.train_anim > 0.0 {
-            self.train_anim += dt;
-            // Münzen droppen, sobald der Zug die Mitte erreicht.
-            if !self.train_dropped && self.train_anim >= TRAIN_DURATION * 0.45 {
-                self.train_dropped = true;
-                let platform_y = TRAIN_PLATFORM_TILE_Y as f32 * TILE_SIZE;
-                // 10 Silbermünzen entlang des Bahnsteigs verteilen.
-                for i in 0..10 {
-                    let x_tile = 96 + i * 3;
-                    let x = x_tile as f32 * TILE_SIZE;
-                    let mut c = Coin::new(x, platform_y, CoinKind::Silver);
-                    c.respawn_t = 99999.0; // Einmal-Münzen
-                    self.coins.push(c);
+        let track_y = TRAIN_TRACK_TILE_Y as f32 * TILE_SIZE;
+        let enter_speed = 220.0;
+        let leave_speed = 200.0;
+        let train_len = 110.0;
+        let map_right = MAP_W as f32 * TILE_SIZE;
+        let track_left = (TRAIN_TRACK_X_MIN as f32) * TILE_SIZE;
+
+        // Hilfsfunktion: weiter fahren in aktuelle Richtung
+        let dir_sign = match self.train_dir { TrainDir::East => 1.0, TrainDir::West => -1.0 };
+
+        // Nächste Stopposition (Welt-X) basierend auf train_next_stop
+        let target_x = station_x(self.train_next_stop);
+
+        match self.train_phase {
+            TrainPhase::Idle => {
+                self.train_t -= dt;
+                if self.train_t <= 0.0 {
+                    // Neue Tour beginnen — Richtung wechseln
+                    self.train_dir = match self.train_dir {
+                        TrainDir::East => TrainDir::West,
+                        TrainDir::West => TrainDir::East,
+                    };
+                    // Alle Stationen wieder „offen"
+                    self.train_remaining_stops = 0b11;
+                    // Erstes Ziel: bei Ost-Fahrt zuerst Harthaus (0), dann Germering (1)
+                    //              bei West-Fahrt umgekehrt
+                    self.train_next_stop = match self.train_dir {
+                        TrainDir::East => 0,
+                        TrainDir::West => 1,
+                    };
+                    self.train_phase = TrainPhase::Entering;
+                    self.train_x = match self.train_dir {
+                        TrainDir::East => track_left - 16.0,
+                        TrainDir::West => map_right + train_len + 16.0,
+                    };
+                    self.train_dropped = false;
                 }
-                self.audio.play_sfx(&self.audio.coin);
             }
-            if self.train_anim >= TRAIN_DURATION {
-                self.train_anim = 0.0;
-                self.train_dropped = false;
-                self.train_t = TRAIN_INTERVAL_SECONDS;
+            TrainPhase::Entering => {
+                self.train_x += dir_sign * enter_speed * dt;
+                let reached = match self.train_dir {
+                    TrainDir::East => self.train_x >= target_x,
+                    TrainDir::West => self.train_x <= target_x,
+                };
+                if reached {
+                    self.train_x = target_x;
+                    self.train_phase = TrainPhase::Dwelling;
+                    self.train_dwell_t = TRAIN_STATION_DWELL;
+                    // Münzen-Drop pro Halt
+                    if !self.train_dropped {
+                        self.train_dropped = true;
+                        let platform_y = TRAIN_PLATFORM_TILE_Y as f32 * TILE_SIZE;
+                        let (px_a, px_b) = station_platform(self.train_next_stop);
+                        let n = 8;
+                        for i in 0..n {
+                            let frac = i as f32 / (n - 1) as f32;
+                            let x = px_a + (px_b - px_a) * frac - 6.0;
+                            let mut c = Coin::new(x, platform_y, CoinKind::Silver);
+                            c.respawn_t = 99999.0;
+                            self.coins.push(c);
+                        }
+                        self.audio.play_sfx(&self.audio.coin);
+                    }
+                }
             }
-        } else {
-            self.train_t -= dt;
-            if self.train_t <= 0.0 {
-                self.train_anim = 0.001; // Start
-                self.train_dropped = false;
+            TrainPhase::Dwelling => {
+                self.train_dwell_t -= dt;
+                if self.train_dwell_t <= 0.0 {
+                    // Aktuelle Station als angefahren markieren
+                    self.train_remaining_stops &= !(1u8 << self.train_next_stop);
+                    self.train_dropped = false;
+                    // Gibt es noch einen Halt in dieser Tour?
+                    let next_candidate = match self.train_dir {
+                        TrainDir::East => 1usize, // nach Harthaus → Germering
+                        TrainDir::West => 0usize, // nach Germering → Harthaus
+                    };
+                    if (self.train_remaining_stops & (1u8 << next_candidate)) != 0 {
+                        self.train_next_stop = next_candidate;
+                        self.train_phase = TrainPhase::Entering;
+                    } else {
+                        self.train_phase = TrainPhase::Leaving;
+                    }
+                }
+            }
+            TrainPhase::Leaving => {
+                self.train_x += dir_sign * leave_speed * dt;
+                let off = match self.train_dir {
+                    TrainDir::East => self.train_x > map_right + train_len + 16.0,
+                    TrainDir::West => self.train_x < track_left - train_len - 16.0,
+                };
+                if off {
+                    self.train_phase = TrainPhase::Idle;
+                    self.train_t = TRAIN_INTERVAL_SECONDS;
+                    self.train_dropped = false;
+                }
+            }
+        }
+
+        // Kollision mit Zug, wenn er rollt — ABER nicht während S-Bahn-Fahrt-Anim
+        if matches!(self.train_phase, TrainPhase::Entering | TrainPhase::Leaving)
+            && self.sbahn_ride_t <= 0.0
+            && self.player.damage_flash <= 0.0
+            && self.player.powerups.invuln <= 0.0
+        {
+            // Train-AABB hängt von Richtung ab: Lok ist vorne in Fahrtrichtung
+            let train_aabb = match self.train_dir {
+                TrainDir::East => Aabb::new(self.train_x - 84.0, track_y, 110.0, 14.0),
+                TrainDir::West => Aabb::new(self.train_x, track_y, 110.0, 14.0),
+            };
+            if self.player.aabb.intersects(&train_aabb) {
+                self.player.take_damage(3);
+                self.audio.play_sfx(&self.audio.damage);
+                self.cam.add_shake(4.5);
+                self.floating_texts.push(FloatingText::damage(
+                    self.player.aabb.x + 4.0, self.player.aabb.y, 3,
+                ));
             }
         }
     }
 
-    /// Klaus läuft beim ersten Mal entlang des Roten Fadens, bis er angesprochen wurde.
-    fn klaus_position(&self) -> (f32, f32) {
+    /// Welcher Bahnsteig steht direkt unter dem Spieler? (Index oder None)
+    fn player_on_station_platform(&self) -> Option<usize> {
+        let (pcx, pcy) = self.player.center();
+        let platform_y = TRAIN_PLATFORM_TILE_Y as f32 * TILE_SIZE;
+        if (pcy - (platform_y + 8.0)).abs() > 16.0 {
+            return None;
+        }
+        for i in 0..2 {
+            let (px_a, px_b) = station_platform(i);
+            if pcx >= px_a && pcx <= px_b {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Startet eine S-Bahn-Fahrt — kurzes Schwarzbild-„Übergang", danach
+    /// teleportiert den Spieler zum anderen Bahnhof.
+    fn start_sbahn_ride(&mut self, from: usize, to: usize) {
+        self.sbahn_ride_from = from;
+        self.sbahn_ride_to = to;
+        self.sbahn_ride_t = 1.6;
+        self.player.powerups.invuln = self.player.powerups.invuln.max(2.0);
+        self.audio.play_sfx(&self.audio.jingle);
+    }
+
+    fn tick_sbahn_ride(&mut self, dt: f32) {
+        if self.sbahn_ride_t <= 0.0 { return; }
+        let prev = self.sbahn_ride_t;
+        self.sbahn_ride_t = (self.sbahn_ride_t - dt).max(0.0);
+        // Bei der Hälfte: Teleport
+        if prev > 0.8 && self.sbahn_ride_t <= 0.8 {
+            let to_x = station_x(self.sbahn_ride_to);
+            let platform_y = TRAIN_PLATFORM_TILE_Y as f32 * TILE_SIZE;
+            self.player.aabb.x = to_x;
+            self.player.aabb.y = platform_y + 4.0;
+            self.player.vx = 0.0;
+            self.player.vy = 0.0;
+            let (pcx, pcy) = self.player.center();
+            self.cam.follow(pcx, pcy);
+        }
+    }
+
+    /// Busse spawnen, fahren auf horizontalen Straßen, halten an Ampeln &
+    /// Zebras. Bei Stau wird die Geschwindigkeit reduziert.
+    fn tick_buses(&mut self, dt: f32) {
+        self.bus_hit_cooldown = (self.bus_hit_cooldown - dt).max(0.0);
+        // Spawn-Timer — viele Busse für lebendige Stadt
+        self.bus_spawn_t -= dt;
+        if self.bus_spawn_t <= 0.0 && self.buses.len() < 10 {
+            self.bus_spawn_t = 3.5 + (self.game_seconds * 1.7).sin().abs() * 2.0;
+            let line_idx = ((self.game_seconds * 0.7) as usize + self.buses.len())
+                % BUS_LINES.len();
+            let h_roads = [20i32, 40, 60, 80, 100];
+            let road_idx = ((self.game_seconds * 0.5) as usize + self.buses.len() / 2)
+                % h_roads.len();
+            let road_y = h_roads[road_idx] as f32 * TILE_SIZE;
+            let east = (line_idx + road_idx) % 2 == 0;
+            let (x, dir) = if east {
+                (-32.0, BusDir::East)
+            } else {
+                (MAP_W as f32 * TILE_SIZE + 4.0, BusDir::West)
+            };
+            self.buses.push(Bus {
+                line_idx,
+                x,
+                y: road_y,
+                dir,
+                speed: 60.0 + (line_idx as f32) * 4.0,
+                swear_t: 0.0,
+                swear_text: String::new(),
+                honk_t: 0.0,
+            });
+            self.bus_uids.push(self.bus_next_uid);
+            self.bus_next_uid += 1;
+        }
+
+        // Vorbereitung
+        let map_right = MAP_W as f32 * TILE_SIZE;
+        let pcx_p = self.player.aabb.x;
+        let pcy_p = self.player.aabb.y;
+        let traffic_t = self.traffic_phase_t;
+        let active_zebras = self.active_zebras_world();
+        let jam_road_y = if self.traffic_jam_t > 0.0 { Some(self.traffic_jam_road_y) } else { None };
+
+        let mut player_hit_by_bus = false;
+        let mut swear_idx: Option<(usize, &'static str)> = None;
+        for (i, b) in self.buses.iter_mut().enumerate() {
+            b.swear_t = (b.swear_t - dt).max(0.0);
+            b.honk_t = (b.honk_t - dt).max(0.0);
+
+            // Stau?
+            let in_jam = jam_road_y.map(|y| (b.y - y).abs() < 6.0).unwrap_or(false);
+            let target_speed = if in_jam { b.speed * 0.25 } else { b.speed };
+
+            // Soll der Bus halten?
+            let dir_east = matches!(b.dir, BusDir::East);
+            let stop_now = vehicle_should_stop(
+                b.x, b.y, dir_east, 30.0, traffic_t, &active_zebras,
+            );
+            let v = if stop_now {
+                0.0
+            } else {
+                match b.dir {
+                    BusDir::East => target_speed,
+                    BusDir::West => -target_speed,
+                }
+            };
+            b.x += v * dt;
+
+            // Hupen
+            let dx = pcx_p - b.x;
+            let dy = pcy_p - b.y;
+            if dx.abs() < 80.0 && dy.abs() < 24.0 && b.honk_t <= 0.0 {
+                let in_front = match b.dir {
+                    BusDir::East => dx > 0.0 && dx < 80.0,
+                    BusDir::West => dx < 0.0 && dx > -80.0,
+                };
+                if in_front && !stop_now {
+                    b.honk_t = 2.0;
+                }
+            }
+
+            // Kollision (nur wenn Spieler NICHT in diesem Bus mitfährt)
+            let player_in_this_bus = self.riding_bus_uid
+                .map(|uid| self.bus_uids.get(i).map(|u| *u == uid).unwrap_or(false))
+                .unwrap_or(false);
+            if !player_in_this_bus
+                && b.aabb().intersects(&self.player.aabb)
+                && self.bus_hit_cooldown <= 0.0
+                && self.player.damage_flash <= 0.0
+                && self.player.powerups.invuln <= 0.0
+            {
+                player_hit_by_bus = true;
+                let swears = [
+                    "Geh weida, du Depp!",
+                    "Sakrament nochamoi!",
+                    "Ja spinnst du!?",
+                    "Heiliger Bimbam!",
+                    "Gschissna Saupreiß!",
+                    "Hirndoddl, schau hi!",
+                ];
+                let s = swears[(i + self.coins_collected as usize) % swears.len()];
+                swear_idx = Some((i, s));
+            }
+        }
+        if let Some((i, s)) = swear_idx {
+            self.buses[i].swear_t = 2.5;
+            self.buses[i].swear_text = s.to_string();
+        }
+        if player_hit_by_bus {
+            self.player.take_damage(BUS_DAMAGE);
+            self.bus_hit_cooldown = 1.5;
+            self.cam.add_shake(4.0);
+            self.audio.play_sfx(&self.audio.damage);
+            self.floating_texts.push(FloatingText::damage(
+                self.player.aabb.x + 4.0, self.player.aabb.y, BUS_DAMAGE,
+            ));
+        }
+
+        // Wenn der Spieler mitfährt — Position an den Bus klemmen
+        if let Some(uid) = self.riding_bus_uid {
+            if let Some(idx) = self.bus_uids.iter().position(|u| *u == uid) {
+                let b = &self.buses[idx];
+                self.player.aabb.x = b.x + 6.0;
+                self.player.aabb.y = b.y - 2.0;
+                self.player.vx = 0.0;
+                self.player.vy = 0.0;
+                self.player.powerups.invuln = self.player.powerups.invuln.max(0.5);
+            } else {
+                // Bus wurde despawnt → automatisch absteigen
+                self.riding_bus_uid = None;
+                self.bus_ride_msg = "Endstation - aus dem Bus!".to_string();
+                self.bus_ride_msg_t = 2.0;
+            }
+        }
+
+        // Aus der Liste werfen, wenn weit außerhalb der Karte — parallel UIDs entfernen
+        let mut keep: Vec<bool> = self.buses.iter()
+            .map(|b| b.x > -120.0 && b.x < map_right + 120.0)
+            .collect();
+        // Falls der Spieler im Bus mitfährt und der Bus an der Karte verschwinden würde,
+        // dismounten wir den Spieler an der letzten Bus-Position.
+        if let Some(uid) = self.riding_bus_uid {
+            if let Some(idx) = self.bus_uids.iter().position(|u| *u == uid) {
+                if !keep[idx] {
+                    // Spieler an Map-Rand-Position sicher absetzen
+                    let b = &self.buses[idx];
+                    let mid_road_y = b.y + 16.0; // Sidewalk unter der Straße
+                    self.player.aabb.x = b.x.clamp(8.0, map_right - 8.0);
+                    self.player.aabb.y = mid_road_y;
+                    self.riding_bus_uid = None;
+                    self.bus_ride_msg = "Endstation - aus dem Bus!".to_string();
+                    self.bus_ride_msg_t = 2.0;
+                    // Forciere keep für Sicherheit (kein partieller State)
+                    let _ = &mut keep;
+                }
+            }
+        }
+        let mut i = 0;
+        let mut j = 0;
+        while i < self.buses.len() {
+            if !keep[j] {
+                self.buses.remove(i);
+                self.bus_uids.remove(i);
+                j += 1;
+            } else {
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+
+    /// NPC-Pkw: spawnen, fahren, an Ampeln + Zebras halten, Spielerkollision.
+    fn tick_cars(&mut self, dt: f32) {
+        self.car_spawn_t -= dt;
+        if self.car_spawn_t <= 0.0 && self.cars.len() < CAR_MAX {
+            self.car_spawn_t = 1.4 + (self.game_seconds * 2.1).cos().abs() * 1.4;
+            let h_roads = [20i32, 40, 60, 80, 100];
+            let road_idx = ((self.game_seconds * 1.3) as usize + self.cars.len())
+                % h_roads.len();
+            let road_y = h_roads[road_idx] as f32 * TILE_SIZE;
+            let east = (self.cars.len() + road_idx + (self.game_seconds as usize)) % 2 == 0;
+            let (x, dir) = if east {
+                (-24.0, CarDir::East)
+            } else {
+                (MAP_W as f32 * TILE_SIZE + 4.0, CarDir::West)
+            };
+            let palette = [
+                Color::new(0.85, 0.18, 0.18, 1.0), // rot
+                Color::new(0.18, 0.30, 0.65, 1.0), // blau
+                Color::new(0.10, 0.10, 0.12, 1.0), // schwarz
+                Color::new(0.92, 0.92, 0.92, 1.0), // weiß
+                Color::new(0.55, 0.55, 0.58, 1.0), // silber
+                Color::new(0.95, 0.78, 0.20, 1.0), // gelb
+                Color::new(0.20, 0.55, 0.30, 1.0), // grün
+            ];
+            let body = palette[self.cars.len() % palette.len()];
+            self.cars.push(Car {
+                x,
+                y: road_y + 1.0,
+                dir,
+                speed: 70.0 + ((self.cars.len() * 13) % 30) as f32,
+                current_v: 0.0,
+                body,
+                honk_t: 0.0,
+            });
+        }
+
+        let map_right = MAP_W as f32 * TILE_SIZE;
+        let traffic_t = self.traffic_phase_t;
+        let active_zebras = self.active_zebras_world();
+        let jam_road_y = if self.traffic_jam_t > 0.0 { Some(self.traffic_jam_road_y) } else { None };
+        let pcx_p = self.player.aabb.x;
+        let pcy_p = self.player.aabb.y;
+
+        // Hinter-Auto-Stau: berechne pro Auto die nächste Auto-Position davor
+        let snapshot: Vec<(f32, f32, bool)> = self.cars
+            .iter()
+            .map(|c| (c.x, c.y, matches!(c.dir, CarDir::East)))
+            .collect();
+
+        let mut player_hit = false;
+        for (i, c) in self.cars.iter_mut().enumerate() {
+            c.honk_t = (c.honk_t - dt).max(0.0);
+            let dir_east = matches!(c.dir, CarDir::East);
+            let in_jam = jam_road_y.map(|y| (c.y - y).abs() < 6.0).unwrap_or(false);
+            let target_speed = if in_jam { c.speed * 0.18 } else { c.speed };
+
+            // Halt für Ampeln / Zebras?
+            let mut stop_now = vehicle_should_stop(
+                c.x, c.y, dir_east, 20.0, traffic_t, &active_zebras,
+            );
+
+            // Stau dahinter: nicht in das vorherige Auto reinfahren
+            if !stop_now {
+                for (j, &(ox, oy, oe)) in snapshot.iter().enumerate() {
+                    if j == i { continue; }
+                    if (oy - c.y).abs() > 6.0 { continue; }
+                    if oe != dir_east { continue; }
+                    let ahead = match c.dir {
+                        CarDir::East => ox - c.x,
+                        CarDir::West => c.x - ox,
+                    };
+                    if ahead > 0.0 && ahead < 22.0 {
+                        stop_now = true;
+                        break;
+                    }
+                }
+            }
+
+            // Beschleunigung / Bremsung
+            let want = if stop_now {
+                0.0
+            } else {
+                match c.dir { CarDir::East => target_speed, CarDir::West => -target_speed }
+            };
+            let acc = 110.0 * dt;
+            if c.current_v < want { c.current_v = (c.current_v + acc).min(want.max(0.0).max(c.current_v + acc)); }
+            if c.current_v > want { c.current_v = (c.current_v - acc).max(want.min(0.0).min(c.current_v - acc)); }
+            // Sicherheits-Clamp
+            let max_v = c.speed.max(target_speed);
+            c.current_v = c.current_v.clamp(-max_v, max_v);
+
+            c.x += c.current_v * dt;
+
+            // Hupen, wenn Spieler dicht vor dem Auto steht
+            let dx = pcx_p - c.x;
+            let dy = pcy_p - c.y;
+            if dx.abs() < 50.0 && dy.abs() < 18.0 && c.honk_t <= 0.0 {
+                let in_front = match c.dir {
+                    CarDir::East => dx > 0.0 && dx < 50.0,
+                    CarDir::West => dx < 0.0 && dx > -50.0,
+                };
+                if in_front && stop_now {
+                    c.honk_t = 1.4;
+                }
+            }
+
+            // Kollision
+            if c.aabb().intersects(&self.player.aabb)
+                && self.player.damage_flash <= 0.0
+                && self.player.powerups.invuln <= 0.0
+                && self.riding_bus_uid.is_none()
+            {
+                player_hit = true;
+            }
+        }
+
+        if player_hit {
+            self.player.take_damage(CAR_DAMAGE);
+            self.cam.add_shake(3.0);
+            self.audio.play_sfx(&self.audio.damage);
+            self.floating_texts.push(FloatingText::damage(
+                self.player.aabb.x + 4.0, self.player.aabb.y, CAR_DAMAGE,
+            ));
+        }
+
+        self.cars.retain(|c| c.x > -120.0 && c.x < map_right + 120.0);
+    }
+
+    /// Liefert die Welt-Koordinaten aller Zebrastreifen, an denen der Spieler
+    /// gerade nahe genug steht (Fahrzeuge halten dann).
+    fn active_zebras_world(&self) -> Vec<(f32, f32)> {
+        let (pcx, pcy) = self.player.center();
+        let mut zs = Vec::new();
+        for &(zx, zy) in ZEBRA_TILES.iter() {
+            let zwx = zx as f32 * TILE_SIZE + 8.0;
+            let zwy = zy as f32 * TILE_SIZE + 8.0;
+            if (pcx - zwx).abs() < 28.0 && (pcy - zwy).abs() < 28.0 {
+                zs.push((zwx, zwy));
+            }
+        }
+        zs
+    }
+
+    /// Tickt den Ampel-Phasentimer.
+    fn tick_traffic_lights(&mut self, dt: f32) {
+        self.traffic_phase_t = (self.traffic_phase_t + dt) % 14.0;
+    }
+
+    /// Periodische Stau-Ereignisse — pickt eine h_road und reduziert Speeds.
+    fn tick_traffic_jam(&mut self, dt: f32) {
+        if self.traffic_jam_t > 0.0 {
+            self.traffic_jam_t -= dt;
+            return;
+        }
+        self.traffic_jam_cooldown -= dt;
+        if self.traffic_jam_cooldown <= 0.0 {
+            self.traffic_jam_cooldown = TRAFFIC_JAM_INTERVAL
+                + (self.game_seconds * 0.7).sin().abs() * 30.0;
+            let h_roads = [20i32, 40, 60, 80, 100];
+            let idx = ((self.game_seconds * 0.13) as usize) % h_roads.len();
+            self.traffic_jam_road_y = h_roads[idx] as f32 * TILE_SIZE;
+            self.traffic_jam_t = TRAFFIC_JAM_DURATION;
+            self.area_name = "STAU! Verkehr stockt auf dieser Strasse".to_string();
+            self.area_fade = 3.5;
+        }
+    }
+
+    /// Aktualisiert wandernde Bürger + Säufer.
+    fn tick_pedestrians(&mut self, dt: f32) {
+        let pcx_player = self.player.aabb.x + 6.0;
+        let pcy_player = self.player.aabb.y + 7.0;
+        let mut drunk_hit = false;
+        for p in self.pedestrians.iter_mut() {
+            p.phase += dt;
+            p.wander_t -= dt;
+            p.hit_cool = (p.hit_cool - dt).max(0.0);
+            p.bubble_t = (p.bubble_t - dt).max(0.0);
+
+            match p.kind {
+                PedKind::Citizen => {
+                    if p.wander_t <= 0.0 {
+                        p.wander_t = 2.5 + (p.phase * 1.3).sin().abs() * 3.0;
+                        let a = p.phase * 1.27;
+                        p.vx = a.cos() * 22.0;
+                        p.vy = a.sin() * 22.0;
+                    }
+                }
+                PedKind::Drunk => {
+                    let dx = pcx_player - (p.aabb.x + 6.0);
+                    let dy = pcy_player - (p.aabb.y + 7.0);
+                    let dist = (dx * dx + dy * dy).sqrt().max(0.001);
+                    if dist < 90.0 {
+                        // Auf Spieler zu wanken (zickzack)
+                        let wobble = (p.phase * 4.0).sin();
+                        p.vx = (dx / dist) * 35.0 + wobble * 18.0;
+                        p.vy = (dy / dist) * 35.0;
+                        // Berührungs-Schaden
+                        if p.aabb.intersects(&self.player.aabb)
+                            && p.hit_cool <= 0.0
+                            && self.player.damage_flash <= 0.0
+                            && self.player.powerups.invuln <= 0.0
+                        {
+                            drunk_hit = true;
+                            p.hit_cool = 1.2;
+                            p.bubble_t = 2.0;
+                            let taunts = [
+                                "Gehst weida, Buaberl!",
+                                "Prooooost!",
+                                "I hau di um!",
+                                "*hicks*",
+                                "Du schauglst mi bled o!",
+                            ];
+                            p.bubble_text = taunts
+                                [((p.phase * 17.0) as usize) % taunts.len()].to_string();
+                        }
+                    } else {
+                        if p.wander_t <= 0.0 {
+                            p.wander_t = 1.5;
+                            let a = p.phase * 0.7;
+                            p.vx = a.cos() * 14.0;
+                            p.vy = a.sin() * 14.0;
+                        }
+                    }
+                }
+            }
+
+            // Bewegung mit Tile-Kollision
+            let _ = move_aabb(&self.world, &mut p.aabb, p.vx * dt, p.vy * dt);
+        }
+        if drunk_hit {
+            self.player.take_damage(1);
+            self.cam.add_shake(2.5);
+            self.audio.play_sfx(&self.audio.damage);
+            self.floating_texts.push(FloatingText::damage(
+                self.player.aabb.x + 4.0, self.player.aabb.y, 1,
+            ));
+        }
+    }
+
+    /// Klaus wartet am Germarbrunnen, bis der Spieler nah ist.
+    /// Erst dann läuft er los Richtung Filialen — so verliert man ihn nie.
+    fn klaus_position(&mut self) -> (f32, f32) {
         // Statische Pose nach abgeschlossener Tour.
         if self.klaus_tour_done {
-            return (101.0 * TILE_SIZE, 62.0 * TILE_SIZE);
+            return (105.0 * TILE_SIZE, 51.0 * TILE_SIZE);
         }
-        // Pfad-Wegpunkte (Tile-Koord), Klaus läuft sie langsam ab.
+        // Wartet am Brunnen, bis Spieler näher als 6 Tiles ist.
+        let home_tx = 105.0;
+        let home_ty = 51.0;
+        if !self.klaus_started_walking {
+            let (pcx, pcy) = self.player.center();
+            let dx = pcx - home_tx * TILE_SIZE;
+            let dy = pcy - home_ty * TILE_SIZE;
+            if dx * dx + dy * dy < (6.0 * TILE_SIZE).powi(2) {
+                self.klaus_started_walking = true;
+                self.klaus_tour_t = 0.0;
+            }
+            return (home_tx * TILE_SIZE, home_ty * TILE_SIZE);
+        }
+        // Pfad-Wegpunkte zur Filiale 2 (GEP, neue Position).
         let path: &[(f32, f32)] = &[
-            (101.0, 62.0),
-            (95.0, 60.0),
-            (80.0, 60.0),
-            (65.0, 60.0),
+            (105.0, 51.0),
+            (90.0, 60.0),
+            (70.0, 60.0),
             (55.0, 60.0),
+            (45.0, 67.0),
         ];
-        let speed_seg = 12.0; // Sekunden pro Segment
+        let speed_seg = 12.0;
         let t = self.klaus_tour_t / speed_seg;
         let seg = (t as usize).min(path.len() - 2);
         let local = (t - seg as f32).clamp(0.0, 1.0);
@@ -995,14 +1933,45 @@ impl Game {
     }
 
     fn update_paused(&mut self) {
+        // 0=Weiter, 1=Respawn (Checkpoint), 2=Speichern, 3=Hauptmenü
+        if is_key_pressed(KeyCode::W) || is_key_pressed(KeyCode::Up) {
+            if self.pause_cursor > 0 {
+                self.pause_cursor -= 1;
+            }
+            self.audio.play_sfx(&self.audio.menu_select);
+        }
+        if is_key_pressed(KeyCode::S) || is_key_pressed(KeyCode::Down) {
+            if self.pause_cursor < 3 {
+                self.pause_cursor += 1;
+            }
+            self.audio.play_sfx(&self.audio.menu_select);
+        }
+        if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::E) {
+            match self.pause_cursor {
+                0 => { self.state = GameState::Playing; }
+                1 => {
+                    // Respawn am Checkpoint
+                    self.respawn_at_checkpoint();
+                    self.save_message = "Respawn am Checkpoint!".to_string();
+                    self.save_message_t = 2.0;
+                }
+                2 => {
+                    save::save(&self.to_save());
+                    self.save_message = "Gespeichert (save.dat)".to_string();
+                    self.save_message_t = 2.0;
+                }
+                3 => {
+                    save::save(&self.to_save());
+                    self.state = GameState::TitleMenu;
+                    self.menu_cursor = 0;
+                    self.pause_cursor = 0;
+                }
+                _ => {}
+            }
+        }
         if is_key_pressed(KeyCode::P) {
             self.state = GameState::Playing;
-        }
-        if is_key_pressed(KeyCode::Escape) {
-            // Speichern & zum Hauptmenü
-            save::save(&self.to_save());
-            self.state = GameState::TitleMenu;
-            self.menu_cursor = 0;
+            self.pause_cursor = 0;
         }
     }
 
@@ -1155,38 +2124,123 @@ impl Game {
             );
         }
 
-        // S-Bahn (prozedural — 3 rot-weiße Wagen, gleiten von links nach rechts)
-        if self.train_anim > 0.0 {
-            let progress = (self.train_anim / TRAIN_DURATION).clamp(0.0, 1.0);
-            // Zug startet links außerhalb der Bahnhof-Area und verlässt sie rechts.
-            let x0 = 92.0 * TILE_SIZE - 96.0; // Start (links)
-            let x1 = 132.0 * TILE_SIZE + 16.0; // Ende (rechts)
-            let train_world_x = x0 + (x1 - x0) * progress;
+        // S-Bahn (prozedural — 4 rot-weiße Wagen, Lok vorne)
+        if self.train_phase != TrainPhase::Idle {
             let train_world_y = TRAIN_TRACK_TILE_Y as f32 * TILE_SIZE;
-            let (tsx, tsy) = self.cam.world_to_screen(train_world_x, train_world_y);
+            let (tsx, tsy) = self.cam.world_to_screen(self.train_x, train_world_y);
             let car_w = 26.0;
             let car_h = 12.0;
             let gap = 2.0;
-            // Lok (vorne, dunkler)
+            // Lok (vorne, dunkelrot)
             draw_rectangle(tsx, tsy + 1.0, car_w, car_h, Color::new(0.6, 0.10, 0.10, 1.0));
             draw_rectangle(tsx + 2.0, tsy + 3.0, car_w - 4.0, 3.0, Color::new(0.95, 0.95, 0.95, 1.0));
             draw_rectangle(tsx + 2.0, tsy + 8.0, 5.0, 3.0, Color::new(0.18, 0.18, 0.20, 1.0));
-            // 2 Anhängerwagen
-            for i in 1..=2 {
+            // Scheinwerfer vorne
+            draw_circle(tsx + car_w - 1.0, tsy + 5.0, 1.5, Color::new(1.0, 0.95, 0.55, 1.0));
+            // 3 Anhängerwagen
+            for i in 1..=3 {
                 let cx = tsx - i as f32 * (car_w + gap);
                 draw_rectangle(cx, tsy + 1.0, car_w, car_h, Color::new(0.85, 0.18, 0.18, 1.0));
                 draw_rectangle(cx + 2.0, tsy + 3.0, car_w - 4.0, 2.0, Color::new(0.98, 0.97, 0.94, 1.0));
-                // Fenster
+                // Fenster (3 pro Wagen)
                 draw_rectangle(cx + 3.0, tsy + 6.0, 4.0, 3.0, Color::new(0.20, 0.30, 0.45, 1.0));
                 draw_rectangle(cx + 10.0, tsy + 6.0, 4.0, 3.0, Color::new(0.20, 0.30, 0.45, 1.0));
                 draw_rectangle(cx + 17.0, tsy + 6.0, 4.0, 3.0, Color::new(0.20, 0.30, 0.45, 1.0));
+                // Bei Halt: Türen öffnen sich auf der Bahnsteig-Seite
+                if self.train_phase == TrainPhase::Dwelling {
+                    draw_rectangle(
+                        cx + car_w / 2.0 - 3.0,
+                        tsy + 5.0,
+                        6.0,
+                        7.0,
+                        Color::new(0.10, 0.10, 0.15, 1.0),
+                    );
+                }
             }
             // Räder
-            for i in 0..3 {
+            for i in 0..4 {
                 let cx = tsx - i as f32 * (car_w + gap);
                 draw_circle(cx + 5.0, tsy + car_h + 1.0, 2.0, BLACK);
                 draw_circle(cx + car_w - 5.0, tsy + car_h + 1.0, 2.0, BLACK);
             }
+            // "S8" Liniennummer wird im UI-Pass crisp gerendert
+        }
+
+        // --- Busse ---
+        let tod_now = time_of_day(self.game_seconds);
+        let is_night = tod_now == TimeOfDay::Nacht || tod_now == TimeOfDay::Abend;
+        for b in &self.buses {
+            let (bsx, bsy) = self.cam.world_to_screen(b.x, b.y + 1.0);
+            // Schatten
+            draw_rectangle(bsx + 1.0, bsy + 14.0, 28.0, 2.0, Color::new(0.0, 0.0, 0.0, 0.35));
+            // Bus-Körper (MVV-Grün-Weiß)
+            draw_rectangle(bsx, bsy, 30.0, 14.0, Color::new(0.10, 0.45, 0.18, 1.0));
+            // Weißer Streifen Mitte
+            draw_rectangle(bsx, bsy + 4.0, 30.0, 4.0, Color::new(0.95, 0.95, 0.95, 1.0));
+            // Fenster
+            for fi in 0..3 {
+                let fx = bsx + 4.0 + fi as f32 * 8.0;
+                draw_rectangle(fx, bsy + 5.0, 6.0, 2.5, Color::new(0.25, 0.35, 0.50, 1.0));
+            }
+            // Front (heller, Windschutzscheibe)
+            let (front_x, head_x) = match b.dir {
+                BusDir::East => (bsx + 26.0, bsx + 29.0),
+                BusDir::West => (bsx, bsx),
+            };
+            draw_rectangle(front_x, bsy + 2.0, 4.0, 9.0, Color::new(0.25, 0.35, 0.50, 1.0));
+            // Räder
+            draw_circle(bsx + 5.0, bsy + 14.0, 2.0, BLACK);
+            draw_circle(bsx + 25.0, bsy + 14.0, 2.0, BLACK);
+            // Liniennummer-Schild (Hintergrund — Text im UI-Pass crisp)
+            let sign_x = match b.dir {
+                BusDir::East => bsx + 16.0,
+                BusDir::West => bsx + 2.0,
+            };
+            draw_rectangle(sign_x, bsy - 1.0, 12.0, 5.0, Color::new(0.18, 0.18, 0.22, 1.0));
+            // Scheinwerfer bei Nacht
+            if is_night {
+                let light_dx = match b.dir { BusDir::East => 18.0, BusDir::West => -18.0 };
+                let cone_dx = match b.dir { BusDir::East => 32.0, BusDir::West => -32.0 };
+                draw_circle(head_x, bsy + 6.0, 2.5, Color::new(1.0, 0.95, 0.65, 1.0));
+                // Lichtkegel
+                draw_triangle(
+                    macroquad::math::vec2(head_x, bsy + 2.0),
+                    macroquad::math::vec2(head_x, bsy + 11.0),
+                    macroquad::math::vec2(head_x + cone_dx, bsy + 6.0 + light_dx * 0.05),
+                    Color::new(1.0, 0.95, 0.60, 0.22),
+                );
+            }
+            // Hupe + Schimpfwort werden im UI-Pass crisp gerendert.
+        }
+
+        // --- Wandernde NPCs (Bürger + Säufer) ---
+        for p in &self.pedestrians {
+            let (sx, sy) = self.cam.world_to_screen(p.aabb.x - 2.0, p.aabb.y - 2.0);
+            let bob = (p.phase * 2.4).sin() * 0.6;
+            // Kopf
+            draw_circle(sx + 8.0, sy + 4.0 + bob, 2.5,
+                Color::new(0.95, 0.78, 0.55, 1.0));
+            // Körper (mit Outfit-Tönung)
+            draw_rectangle(sx + 5.0, sy + 6.0 + bob, 6.0, 7.0, p.tint);
+            // Beine
+            draw_rectangle(sx + 5.0, sy + 12.0 + bob, 2.0, 4.0,
+                Color::new(0.25, 0.18, 0.10, 1.0));
+            draw_rectangle(sx + 9.0, sy + 12.0 + bob, 2.0, 4.0,
+                Color::new(0.25, 0.18, 0.10, 1.0));
+            // Säufer: Bierkrug in der Hand + roter Kopf
+            if p.kind == PedKind::Drunk {
+                draw_circle(sx + 8.0, sy + 4.0 + bob, 2.5,
+                    Color::new(1.0, 0.55, 0.50, 1.0));
+                // Bierkrug
+                draw_rectangle(sx + 12.0, sy + 7.0 + bob, 3.0, 4.0,
+                    Color::new(0.95, 0.80, 0.30, 1.0));
+                draw_rectangle(sx + 12.0, sy + 6.0 + bob, 3.0, 2.0,
+                    Color::new(1.0, 1.0, 1.0, 0.9));
+                // Wank-Schwanken
+                let sway = (p.phase * 5.0).sin() * 0.5;
+                let _ = sway;
+            }
+            // Sprechblase wird im UI-Pass gezeichnet (gestochen scharfer Text).
         }
 
         // Münzen
@@ -1497,10 +2551,10 @@ impl Game {
         }
         let (pcx, pcy) = self.player.center();
         let landmarks: &[((i32, i32), &str)] = &[
-            ((100, 60), "Germarbrunnen"),
+            ((105, 50), "Germarbrunnen"),
             ((115, 35), "Jakobusbrunnen"),
             ((85, 65), "Mariensäule"),
-            ((8, 50), "Römischer Ziegelbrennofen"),
+            ((8, 54), "Römischer Ziegelbrennofen"),
             ((20, 105), "Cordobar-Ruine"),
         ];
         for &((lx, ly), name) in landmarks {
@@ -1512,10 +2566,48 @@ impl Game {
             }
         }
         if !self.roman_artifact {
-            let mdx = pcx - 115.0 * TILE_SIZE;
-            let mdy = pcy - 58.0 * TILE_SIZE;
-            if mdx * mdx + mdy * mdy < 24.0 * 24.0 {
+            let mdx = pcx - 122.0 * TILE_SIZE;
+            let mdy = pcy - 67.0 * TILE_SIZE;
+            if mdx * mdx + mdy * mdy < 28.0 * 28.0 {
                 ui::draw_hint(ui, "[E] Stadtmuseum ZEIT+RAUM betreten");
+                return;
+            }
+        }
+        // Bus-Boarding-Hinweis
+        if self.riding_bus_uid.is_none() {
+            for b in &self.buses {
+                let bcx = b.x + 14.0;
+                let bcy = b.y + 8.0;
+                let dx = self.player.aabb.x + 6.0 - bcx;
+                let dy = self.player.aabb.y + 7.0 - bcy;
+                if dx * dx + dy * dy < 26.0 * 26.0 {
+                    ui::draw_hint(
+                        ui,
+                        &format!(
+                            "[E] Linie {} mitfahren ({} M)",
+                            BUS_LINES[b.line_idx].number, BUS_RIDE_COST
+                        ),
+                    );
+                    return;
+                }
+            }
+        } else {
+            ui::draw_hint(ui, "[E] aus dem Bus aussteigen");
+            return;
+        }
+        // S-Bahn-Boarding-Hinweis
+        if self.train_phase == TrainPhase::Dwelling {
+            if let Some(idx) = self.player_on_station_platform() {
+                if idx == self.train_next_stop {
+                    let to = 1 - idx;
+                    ui::draw_hint(
+                        ui,
+                        &format!(
+                            "[E] S8 → {} ({} M)",
+                            station_name(to), SBAHN_RIDE_COST
+                        ),
+                    );
+                }
             }
         }
     }
@@ -1539,45 +2631,79 @@ impl Game {
         }
     }
 
-    /// Welt-Dekorationen: Ihle-Logos + Café-Sitzbereich, reale Germering-Landmarks.
+    /// Welt-Dekorationen: Gebäude-Details, Schilder-Hintergründe.
+    /// Texte werden im UI-Pass gerendert (siehe `draw_world_labels`) — dort
+    /// nativ in Bildschirmauflösung für gestochen scharfe Lesbarkeit.
     fn draw_decorations(&self) {
-        // --- Ihle-Filialen: Logo-Schild + Café-Tische + Stühle ---
+        // --- S-Bahn-Gleise quer über die Karte zeichnen ---
+        let track_world_y = TRAIN_TRACK_TILE_Y as f32 * TILE_SIZE;
+        let tx0 = (self.cam.x / TILE_SIZE) as i32 - 2;
+        let tx1 = ((self.cam.x + VIRTUAL_W as f32) / TILE_SIZE) as i32 + 2;
+        // Schotter-Streifen
+        let (_, gsy) = self.cam.world_to_screen(0.0, track_world_y - 2.0);
+        let (gsx_l, _) = self.cam.world_to_screen(tx0 as f32 * TILE_SIZE, 0.0);
+        let (gsx_r, _) = self.cam.world_to_screen(tx1 as f32 * TILE_SIZE, 0.0);
+        draw_rectangle(
+            gsx_l,
+            gsy,
+            gsx_r - gsx_l,
+            18.0,
+            Color::new(0.45, 0.40, 0.32, 1.0),
+        );
+        // Schwellen
+        for tx in tx0.max(0)..tx1 {
+            let (sx, sy) = self.cam.world_to_screen(tx as f32 * TILE_SIZE, track_world_y);
+            for s_off in 0..4 {
+                let sxx = sx + s_off as f32 * 4.0;
+                draw_rectangle(sxx, sy + 1.0, 2.5, 14.0, Color::new(0.25, 0.18, 0.10, 1.0));
+            }
+        }
+        // Zwei Schienen
+        let (_, rsy_top) = self.cam.world_to_screen(0.0, track_world_y + 3.0);
+        let (_, rsy_bot) = self.cam.world_to_screen(0.0, track_world_y + 11.0);
+        draw_rectangle(gsx_l, rsy_top, gsx_r - gsx_l, 1.5,
+            Color::new(0.75, 0.75, 0.78, 1.0));
+        draw_rectangle(gsx_l, rsy_bot, gsx_r - gsx_l, 1.5,
+            Color::new(0.75, 0.75, 0.78, 1.0));
+
+        // --- Bahnsteig sichtbar machen (zwischen Gleisen und Straße) ---
+        let (_, psy) = self.cam.world_to_screen(0.0, TRAIN_PLATFORM_TILE_Y as f32 * TILE_SIZE);
+        let bahn_x0 = 92.0 * TILE_SIZE;
+        let bahn_x1 = 128.0 * TILE_SIZE;
+        let (psx_l, _) = self.cam.world_to_screen(bahn_x0, 0.0);
+        let (psx_r, _) = self.cam.world_to_screen(bahn_x1, 0.0);
+        draw_rectangle(psx_l, psy, psx_r - psx_l, 16.0,
+            Color::new(0.72, 0.72, 0.74, 1.0));
+        // Gelbe Sicherheitslinie am Bahnsteig
+        draw_rectangle(psx_l, psy + 1.0, psx_r - psx_l, 2.0,
+            Color::new(1.0, 0.85, 0.15, 1.0));
+
+        // --- Echte Germering-Gebäude-Details auf der Building-Schicht ---
+        self.draw_building_details();
+
+        // --- Ihle-Filialen: Logo-Schild-Hintergrund + Café-Sitzbereich ---
         for f in FILIALEN.iter() {
             let bx = f.tile_x as f32 * TILE_SIZE;
             let by = f.tile_y as f32 * TILE_SIZE;
 
-            // Logo-Schild über dem Gebäude (gelb mit roter "IHLE"-Schrift)
+            // Logo-Schild über dem Gebäude (Hintergrund — Text kommt im UI-Pass)
             let sign_w = 44.0;
             let sign_h = 13.0;
             let sign_world_x = bx - sign_w / 2.0 + 8.0;
             let sign_world_y = by - 23.0;
             let (sx, sy) = self.cam.world_to_screen(sign_world_x, sign_world_y);
-            // Befestigungs-Stäbe (vom Schild zur Gebäudewand)
-            draw_rectangle(
-                sx + 4.0,
-                sy + sign_h,
-                1.5,
-                7.0,
-                Color::new(0.30, 0.30, 0.30, 1.0),
-            );
-            draw_rectangle(
-                sx + sign_w - 5.5,
-                sy + sign_h,
-                1.5,
-                7.0,
-                Color::new(0.30, 0.30, 0.30, 1.0),
-            );
-            // Schild-Hintergrund + Border + Highlight
+            draw_rectangle(sx + 4.0, sy + sign_h, 1.5, 7.0,
+                Color::new(0.30, 0.30, 0.30, 1.0));
+            draw_rectangle(sx + sign_w - 5.5, sy + sign_h, 1.5, 7.0,
+                Color::new(0.30, 0.30, 0.30, 1.0));
             draw_rectangle(sx, sy, sign_w, sign_h, Color::new(0.55, 0.12, 0.12, 1.0));
             draw_rectangle(sx + 1.0, sy + 1.0, sign_w - 2.0, sign_h - 2.0,
                 Color::new(1.0, 0.85, 0.15, 1.0));
             draw_rectangle(sx + 1.0, sy + 1.0, sign_w - 2.0, 2.0,
-                Color::new(1.0, 0.95, 0.55, 1.0)); // Glanzlinie oben
-            // "IHLE"-Text mittig
-            draw_text("IHLE", sx + 10.0, sy + 10.0, 12.0, Color::new(0.55, 0.12, 0.12, 1.0));
+                Color::new(1.0, 0.95, 0.55, 1.0));
 
-            // Café-Sitzbereich südlich der Tür (door = (tile_x, tile_y+2))
-            let cafe_y = by + 56.0; // ~3.5 Kacheln unter Gebäudemitte
+            // Café-Sitzbereich südlich der Tür
+            let cafe_y = by + 56.0;
             let table_color = Color::new(0.55, 0.36, 0.20, 1.0);
             let table_top = Color::new(0.78, 0.55, 0.30, 1.0);
             let chair_color = Color::new(0.40, 0.26, 0.14, 1.0);
@@ -1585,17 +2711,14 @@ impl Game {
 
             for &dx_tile in &[-22.0_f32, 20.0_f32] {
                 let (tx, ty) = self.cam.world_to_screen(bx + dx_tile, cafe_y);
-                // Stühle (4 um den Tisch, leicht versetzt für 3/4-Perspektive)
                 draw_circle(tx - 8.0, ty - 1.0, 2.5, chair_color);
                 draw_circle(tx + 8.0, ty - 1.0, 2.5, chair_color);
                 draw_circle(tx - 1.0, ty - 8.0, 2.5, chair_color);
                 draw_circle(tx - 1.0, ty + 6.0, 2.5, chair_color);
-                // Tisch (Schatten + Beine + Platte + Tischtuch)
                 draw_circle(tx, ty + 2.0, 5.5, Color::new(0.0, 0.0, 0.0, 0.3));
                 draw_circle(tx, ty, 5.0, table_color);
                 draw_circle(tx, ty - 0.5, 4.0, table_top);
                 draw_circle(tx, ty - 1.0, 3.0, cloth_color);
-                // Sonnenschirm-Andeutung als Kreis darüber (nur Hauptfiliale + GEP)
                 if f.nummer <= 2 {
                     draw_circle(tx, ty - 3.0, 6.0, Color::new(0.85, 0.18, 0.18, 0.55));
                     draw_rectangle(tx - 0.5, ty - 3.0, 1.0, 4.0,
@@ -1604,65 +2727,457 @@ impl Game {
             }
         }
 
-        // --- St. Jakobskirche ---
-        // Über dem Kirchen-Building bei (113, 30, 5, 5) zeichnen wir den Turm + Kreuz.
+        // --- St. Jakobskirche (Turm-Detail, Text im UI-Pass) ---
         let (kx, ky) = self.cam.world_to_screen(115.0 * TILE_SIZE, 30.0 * TILE_SIZE);
-        // Hauptturm (Glockenturm)
         draw_rectangle(kx - 6.0, ky - 24.0, 12.0, 24.0, Color::new(0.78, 0.74, 0.66, 1.0));
         draw_rectangle_lines(kx - 6.0, ky - 24.0, 12.0, 24.0, 1.0,
             Color::new(0.40, 0.36, 0.28, 1.0));
-        // Spitzdach (Pyramide aus Dreieck)
         draw_triangle(
             macroquad::math::vec2(kx - 7.0, ky - 24.0),
             macroquad::math::vec2(kx + 7.0, ky - 24.0),
             macroquad::math::vec2(kx, ky - 38.0),
             Color::new(0.35, 0.18, 0.10, 1.0),
         );
-        // Kreuz auf der Spitze
+        // Kreuz
         draw_rectangle(kx - 0.5, ky - 46.0, 1.0, 9.0, Color::new(1.0, 0.85, 0.15, 1.0));
         draw_rectangle(kx - 2.5, ky - 42.0, 5.0, 1.0, Color::new(1.0, 0.85, 0.15, 1.0));
-        // Glockenfenster (zwei Rundbögen)
+        // Uhr im Turm
+        draw_circle(kx, ky - 14.0, 2.0, Color::new(0.95, 0.92, 0.78, 1.0));
+        draw_rectangle(kx - 0.3, ky - 15.0, 0.6, 1.5, Color::new(0.0, 0.0, 0.0, 1.0));
+        draw_rectangle(kx - 0.3, ky - 14.3, 1.0, 0.6, Color::new(0.0, 0.0, 0.0, 1.0));
+        // Glockenfenster
         draw_rectangle(kx - 4.0, ky - 18.0, 3.0, 5.0, Color::new(0.18, 0.18, 0.30, 1.0));
         draw_rectangle(kx + 1.0, ky - 18.0, 3.0, 5.0, Color::new(0.18, 0.18, 0.30, 1.0));
-        // Buntglasfenster unten
+        // Buntglas
         draw_rectangle(kx - 3.0, ky - 8.0, 2.0, 5.0, Color::new(0.40, 0.20, 0.55, 1.0));
         draw_rectangle(kx + 1.0, ky - 8.0, 2.0, 5.0, Color::new(0.40, 0.20, 0.55, 1.0));
-        // Schild
-        draw_rectangle(kx - 22.0, ky + 8.0, 44.0, 9.0, Color::new(0.18, 0.18, 0.22, 0.9));
-        draw_text("ST. JAKOBSKIRCHE", kx - 20.0, ky + 15.0, 8.0,
-            Color::new(0.95, 0.95, 0.95, 1.0));
 
-        // --- Stadthalle Banner ---
+        // --- Stadthalle Banner-Hintergrund ---
         let (sx, sy) = self.cam.world_to_screen(77.0 * TILE_SIZE, 49.0 * TILE_SIZE);
         draw_rectangle(sx, sy, 90.0, 14.0, Color::new(0.16, 0.24, 0.50, 1.0));
-        draw_rectangle(sx + 1.0, sy + 1.0, 90.0 - 2.0, 12.0,
+        draw_rectangle(sx + 1.0, sy + 1.0, 88.0, 12.0,
             Color::new(0.22, 0.32, 0.60, 1.0));
-        draw_text("STADTHALLE GERMERING", sx + 4.0, sy + 11.0, 9.0,
-            Color::new(0.95, 0.95, 0.95, 1.0));
 
-        // --- Stadtmuseum ZEIT+RAUM Banner ---
+        // --- Stadtmuseum ZEIT+RAUM Banner-Hintergrund ---
         let (mx, my) = self.cam.world_to_screen(108.0 * TILE_SIZE, 49.0 * TILE_SIZE);
         draw_rectangle(mx, my, 76.0, 14.0, Color::new(0.40, 0.22, 0.10, 1.0));
         draw_rectangle(mx + 1.0, my + 1.0, 74.0, 12.0,
             Color::new(0.55, 0.32, 0.16, 1.0));
-        draw_text("ZEIT+RAUM", mx + 14.0, my + 11.0, 10.0,
-            Color::new(1.0, 0.88, 0.30, 1.0));
 
-        // --- Polariom Eishalle ---
+        // --- Polariom Eishalle Banner-Hintergrund ---
         let (px, py) = self.cam.world_to_screen(160.0 * TILE_SIZE, 75.0 * TILE_SIZE);
         draw_rectangle(px, py, 96.0, 16.0, Color::new(0.20, 0.45, 0.70, 1.0));
         draw_rectangle(px + 1.0, py + 1.0, 94.0, 14.0,
             Color::new(0.45, 0.75, 0.92, 1.0));
-        draw_text("POLARIOM EISHALLE", px + 10.0, py + 12.0, 9.0,
-            Color::new(0.10, 0.20, 0.40, 1.0));
 
-        // --- Bahnhof S8-Schild ---
-        let (bsx, bsy) = self.cam.world_to_screen(96.0 * TILE_SIZE, 13.0 * TILE_SIZE);
+        // --- Bahnhof S8-Schild-Hintergrund ---
+        let (bsx, bsy) = self.cam.world_to_screen(96.0 * TILE_SIZE, 4.0 * TILE_SIZE);
         draw_rectangle(bsx, bsy, 38.0, 14.0, Color::new(0.06, 0.30, 0.10, 1.0));
         draw_rectangle(bsx + 1.0, bsy + 1.0, 36.0, 12.0,
             Color::new(0.12, 0.55, 0.20, 1.0));
-        draw_text("S8 BAHNHOF", bsx + 2.0, bsy + 11.0, 8.0,
-            Color::new(1.0, 1.0, 1.0, 1.0));
+
+        // --- St. Jakobskirche Schild-Hintergrund ---
+        draw_rectangle(kx - 22.0, ky + 8.0, 44.0, 9.0, Color::new(0.18, 0.18, 0.22, 0.9));
+
+        // --- Stadtpark-Bäume + Bänke ---
+        self.draw_park();
+    }
+
+    /// Zeichnet Gebäudedetails pro Gebäude-Block. Dächer werden EINMAL pro
+    /// zusammenhängendem Block gezeichnet, nicht pro Tile — sieht sauberer aus.
+    fn draw_building_details(&self) {
+        let tx0 = (self.cam.x / TILE_SIZE) as i32 - 1;
+        let ty0 = (self.cam.y / TILE_SIZE) as i32 - 1;
+        let tx1 = ((self.cam.x + VIRTUAL_W as f32) / TILE_SIZE) as i32 + 2;
+        let ty1 = ((self.cam.y + VIRTUAL_H as f32) / TILE_SIZE) as i32 + 2;
+
+        // Pro Tile: ist es die oberste Reihe eines Gebäudes (Tile darüber kein Building)?
+        // Dann: zeichne Dachstreifen so breit wie das Gebäude.
+        for y in ty0.max(0)..ty1.min(self.world.h) {
+            for x in tx0.max(0)..tx1.min(self.world.w) {
+                if self.world.get(x, y) != crate::world::Tile::Building {
+                    continue;
+                }
+                let top_is_bldg = y > 0
+                    && self.world.get(x, y - 1) == crate::world::Tile::Building;
+                let left_is_bldg = x > 0
+                    && self.world.get(x - 1, y) == crate::world::Tile::Building;
+                let bottom_is_bldg = self.world.get(x, y + 1) == crate::world::Tile::Building;
+                let bottom_walk = !bottom_is_bldg
+                    && self.world.get(x, y + 1).walkable();
+
+                let (sx, sy) = self.cam.world_to_screen(
+                    x as f32 * TILE_SIZE,
+                    y as f32 * TILE_SIZE,
+                );
+
+                // Wand-Fassadenfarbe (deterministisch pro Gebäude-Spalte)
+                let block_id = self.find_building_left(x, y);
+                let wall_col = match block_id % 4 {
+                    0 => Color::new(0.78, 0.66, 0.50, 1.0), // beige
+                    1 => Color::new(0.72, 0.60, 0.46, 1.0), // sand
+                    2 => Color::new(0.82, 0.72, 0.58, 1.0), // hell
+                    _ => Color::new(0.66, 0.54, 0.40, 1.0), // dunkel
+                };
+                draw_rectangle(sx, sy, 16.0, 16.0, wall_col);
+
+                // Fenster (oben mittig im Tile)
+                if top_is_bldg && !bottom_walk {
+                    // Reihe in der Mitte des Gebäudes — 2 Fenster
+                    draw_rectangle(sx + 2.0, sy + 5.0, 4.0, 5.0,
+                        Color::new(0.30, 0.40, 0.55, 1.0));
+                    draw_rectangle(sx + 10.0, sy + 5.0, 4.0, 5.0,
+                        Color::new(0.30, 0.40, 0.55, 1.0));
+                    // Fenstersprosse
+                    draw_rectangle(sx + 3.8, sy + 5.0, 0.4, 5.0, wall_col);
+                    draw_rectangle(sx + 11.8, sy + 5.0, 0.4, 5.0, wall_col);
+                }
+
+                // Oberste Reihe → Dach drüber
+                if !top_is_bldg {
+                    let roof_col = match block_id % 3 {
+                        0 => Color::new(0.55, 0.18, 0.12, 1.0), // ziegelrot
+                        1 => Color::new(0.45, 0.22, 0.12, 1.0), // dunkelrot
+                        _ => Color::new(0.36, 0.30, 0.22, 1.0), // braun
+                    };
+                    // Dachfläche
+                    draw_rectangle(sx, sy, 16.0, 4.0, roof_col);
+                    // Dachfirst-Schatten
+                    draw_rectangle(sx, sy + 3.5, 16.0, 1.0,
+                        Color::new(0.18, 0.10, 0.08, 1.0));
+                    // Dach-Schornstein (nur am linken Rand des Blocks)
+                    if !left_is_bldg {
+                        draw_rectangle(sx + 11.0, sy - 3.0, 2.5, 3.0,
+                            Color::new(0.32, 0.18, 0.12, 1.0));
+                        draw_rectangle(sx + 11.0, sy - 4.0, 2.5, 1.0,
+                            Color::new(0.20, 0.20, 0.20, 1.0));
+                    }
+                    // Fenster unter dem Dach
+                    draw_rectangle(sx + 3.0, sy + 7.0, 3.0, 4.0,
+                        Color::new(0.30, 0.40, 0.55, 1.0));
+                    draw_rectangle(sx + 10.0, sy + 7.0, 3.0, 4.0,
+                        Color::new(0.30, 0.40, 0.55, 1.0));
+                }
+
+                // Erdgeschoss-Tür auf der walkable Seite
+                if bottom_walk {
+                    let dsx = sx + 6.0;
+                    let dsy = sy + 9.0;
+                    draw_rectangle(dsx, dsy, 4.0, 7.0,
+                        Color::new(0.32, 0.18, 0.10, 1.0));
+                    draw_rectangle(dsx + 0.5, dsy + 0.5, 3.0, 6.0,
+                        Color::new(0.45, 0.25, 0.14, 1.0));
+                    draw_circle(dsx + 3.2, dsy + 4.0, 0.5,
+                        Color::new(1.0, 0.85, 0.15, 1.0));
+                }
+            }
+        }
+    }
+
+    /// Sucht den linken Rand eines Gebäudeblocks → liefert dessen X als ID.
+    fn find_building_left(&self, x: i32, y: i32) -> i32 {
+        let mut xi = x;
+        while xi > 0 && self.world.get(xi - 1, y) == crate::world::Tile::Building {
+            xi -= 1;
+        }
+        xi
+    }
+
+    /// Stadtpark-Detail: Bäume + Bänke + Springbrunnen-Mosaik.
+    fn draw_park(&self) {
+        // Bäume im Stadtpark (Area: 90..130, 30..50)
+        let trees: &[(f32, f32)] = &[
+            (94.0, 33.0), (98.0, 35.0), (105.0, 32.0), (110.0, 38.0),
+            (120.0, 33.0), (125.0, 38.0), (98.0, 45.0), (103.0, 47.0),
+            (108.0, 46.0), (122.0, 45.0),
+        ];
+        for &(tx, ty) in trees {
+            let (sx, sy) = self.cam.world_to_screen(tx * TILE_SIZE, ty * TILE_SIZE);
+            // Stamm
+            draw_rectangle(sx + 6.0, sy + 8.0, 3.0, 6.0,
+                Color::new(0.32, 0.20, 0.12, 1.0));
+            // Krone
+            draw_circle(sx + 8.0, sy + 6.0, 6.0, Color::new(0.18, 0.45, 0.20, 1.0));
+            draw_circle(sx + 5.0, sy + 7.0, 4.0, Color::new(0.22, 0.55, 0.25, 1.0));
+            draw_circle(sx + 11.0, sy + 7.0, 4.0, Color::new(0.20, 0.50, 0.22, 1.0));
+        }
+        // Park-Bänke
+        let benches: &[(f32, f32)] = &[
+            (102.0, 42.0), (115.0, 42.0), (108.0, 48.0),
+        ];
+        for &(bx, by) in benches {
+            let (sx, sy) = self.cam.world_to_screen(bx * TILE_SIZE, by * TILE_SIZE);
+            draw_rectangle(sx + 2.0, sy + 7.0, 12.0, 2.0, Color::new(0.45, 0.30, 0.18, 1.0));
+            draw_rectangle(sx + 2.0, sy + 4.0, 12.0, 1.0, Color::new(0.50, 0.32, 0.20, 1.0));
+            draw_rectangle(sx + 2.0, sy + 9.0, 1.0, 3.0, Color::new(0.25, 0.18, 0.10, 1.0));
+            draw_rectangle(sx + 13.0, sy + 9.0, 1.0, 3.0, Color::new(0.25, 0.18, 0.10, 1.0));
+        }
+        // Springbrunnen-Mosaik um den Jakobusbrunnen
+        let (fsx, fsy) = self.cam.world_to_screen(115.0 * TILE_SIZE, 35.0 * TILE_SIZE);
+        draw_circle(fsx + 8.0, fsy + 8.0, 11.0, Color::new(0.75, 0.75, 0.78, 0.5));
+        draw_circle(fsx + 8.0, fsy + 8.0, 9.0, Color::new(0.55, 0.55, 0.58, 0.6));
+    }
+
+    /// Zeichnet alle Welt-bezogenen Beschriftungen (Stadthalle, Polariom, …)
+    /// im UI-Pass mit nativer Bildschirmauflösung — kein Aliasing.
+    fn draw_world_labels(&self, ui: &ui::UiCtx) {
+        let w2s = |wx: f32, wy: f32| self.cam.world_to_screen(wx, wy);
+
+        // Schwebende Landmark-Schilder. Format: (world_center_x, world_y_unten, txt, fg, bg)
+        let signs: [(f32, f32, &str, Color, Color); 7] = [
+            (
+                88.0 * TILE_SIZE, 41.0 * TILE_SIZE,
+                "Stadthalle",
+                Color::new(1.0, 0.95, 0.85, 1.0),
+                Color::new(0.16, 0.24, 0.50, 1.0),
+            ),
+            (
+                115.0 * TILE_SIZE, 41.0 * TILE_SIZE,
+                "Stadtmuseum ZEIT+RAUM",
+                Color::new(1.0, 0.88, 0.30, 1.0),
+                Color::new(0.40, 0.22, 0.10, 1.0),
+            ),
+            (
+                175.0 * TILE_SIZE, 76.0 * TILE_SIZE,
+                "Polariom Eishalle",
+                Color::new(0.95, 0.98, 1.0, 1.0),
+                Color::new(0.20, 0.45, 0.70, 1.0),
+            ),
+            (
+                110.0 * TILE_SIZE, 3.0 * TILE_SIZE,
+                "S-Bahnhof S8",
+                Color::new(0.95, 0.98, 0.85, 1.0),
+                Color::new(0.06, 0.30, 0.10, 1.0),
+            ),
+            (
+                115.0 * TILE_SIZE, 30.0 * TILE_SIZE,
+                "St. Jakobskirche",
+                Color::new(0.95, 0.95, 0.95, 1.0),
+                Color::new(0.18, 0.18, 0.22, 1.0),
+            ),
+            (
+                36.0 * TILE_SIZE, 41.0 * TILE_SIZE,
+                "GEP Einkaufspassagen",
+                Color::new(0.20, 0.18, 0.10, 1.0),
+                Color::new(1.0, 0.85, 0.15, 1.0),
+            ),
+            (
+                142.0 * TILE_SIZE, 49.0 * TILE_SIZE,
+                "Freibad Germering",
+                Color::new(0.95, 0.98, 1.0, 1.0),
+                Color::new(0.20, 0.55, 0.80, 1.0),
+            ),
+        ];
+
+        let size = 9.0; // konstante, gut lesbare Größe
+
+        for &(cx, by, txt, fg, bg) in &signs {
+            let tw = ui.text_w(txt, size);
+            let pad = 4.0;
+            let sign_w = tw + pad * 2.0;
+            let sign_h = size + 4.0;
+            let sign_world_x = cx - sign_w / 2.0;
+            let sign_world_y = by - sign_h;
+            let (sx, sy) = w2s(sign_world_x, sign_world_y);
+
+            // Off-Screen-Check (am Schild-Anker, nicht am Text)
+            if sx < -sign_w - 20.0 || sx > VIRTUAL_W as f32 + 20.0
+                || sy < -sign_h - 20.0 || sy > VIRTUAL_H as f32 + 20.0
+            {
+                continue;
+            }
+
+            // Holz-Stange unten — verankert das Schild visuell am Gebäude
+            ui.rect(sx + sign_w / 2.0 - 1.0, sy + sign_h, 2.0, 5.0,
+                Color::new(0.30, 0.20, 0.12, 1.0));
+            // Schild-Schatten
+            ui.rect(sx + 1.0, sy + 1.0, sign_w, sign_h,
+                Color::new(0.0, 0.0, 0.0, 0.4));
+            // Schild-Rahmen (dunkel)
+            ui.rect(sx - 1.0, sy - 1.0, sign_w + 2.0, sign_h + 2.0,
+                Color::new(0.10, 0.08, 0.06, 1.0));
+            // Schild-Fläche
+            ui.rect(sx, sy, sign_w, sign_h, bg);
+            // Glanzlinie oben
+            ui.rect(sx, sy, sign_w, 1.5, Color::new(1.0, 1.0, 1.0, 0.18));
+            // Text
+            ui.text(txt, sx + pad, sy + size + 1.0, size, fg);
+        }
+
+        // IHLE-Logo auf den 4 Filialen (über dem Gebäude, kompakter Stil)
+        for f in FILIALEN.iter() {
+            let bx = f.tile_x as f32 * TILE_SIZE;
+            let by = f.tile_y as f32 * TILE_SIZE;
+            // Position über dem Gebäude (Tile-Mitte, ca. 10px höher)
+            let sign_world_y = by - 12.0;
+            let logo_w = 32.0;
+            let logo_h = 11.0;
+            let sign_world_x = bx + 8.0 - logo_w / 2.0;
+            let (sx, sy) = w2s(sign_world_x, sign_world_y);
+            if sx < -logo_w - 20.0 || sx > VIRTUAL_W as f32 + 20.0
+                || sy < -30.0 || sy > VIRTUAL_H as f32 + 20.0
+            {
+                continue;
+            }
+            // Halterung
+            ui.rect(sx + 2.0, sy + logo_h, 1.5, 5.0,
+                Color::new(0.25, 0.25, 0.25, 1.0));
+            ui.rect(sx + logo_w - 3.5, sy + logo_h, 1.5, 5.0,
+                Color::new(0.25, 0.25, 0.25, 1.0));
+            // Schild
+            ui.rect(sx - 0.5, sy - 0.5, logo_w + 1.0, logo_h + 1.0,
+                Color::new(0.10, 0.05, 0.04, 1.0));
+            ui.rect(sx, sy, logo_w, logo_h, Color::new(0.55, 0.12, 0.12, 1.0));
+            ui.rect(sx + 1.0, sy + 1.0, logo_w - 2.0, logo_h - 2.0,
+                Color::new(1.0, 0.85, 0.15, 1.0));
+            ui.rect(sx + 1.0, sy + 1.0, logo_w - 2.0, 2.0,
+                Color::new(1.0, 0.95, 0.55, 1.0));
+            ui.text("IHLE", sx + 7.0, sy + 9.0, 10.0,
+                Color::new(0.55, 0.12, 0.12, 1.0));
+        }
+
+        // Quest-Marker über Klaus, solange Quest 0 läuft
+        if self.quest_stage == 0 && !self.klaus_tour_done {
+            for n in &self.npcs {
+                if n.kind == npc::NpcKind::Klaus {
+                    let (sx, sy) = w2s(n.aabb.x + 4.0, n.aabb.y - 16.0);
+                    let bob = (self.game_seconds * 4.0).sin() * 1.5;
+                    let alpha = 0.9;
+                    // Sprechblase mit "!"
+                    ui.rect(sx - 4.0, sy + bob - 1.0, 14.0, 14.0,
+                        Color::new(0.0, 0.0, 0.0, 0.7));
+                    ui.text("!", sx + 1.0, sy + 11.0 + bob, 13.0,
+                        Color::new(1.0, 0.85, 0.15, alpha));
+                    break;
+                }
+            }
+            self.draw_offscreen_klaus_arrow(ui);
+        }
+
+        // --- Bus-Linien-Nummern (auf dem Schild vorne am Bus) ---
+        for b in &self.buses {
+            let sign_x_off = match b.dir { BusDir::East => 16.0, BusDir::West => 2.0 };
+            let (sx, sy) = w2s(b.x + sign_x_off, b.y);
+            if sx < -20.0 || sx > VIRTUAL_W as f32 + 20.0
+                || sy < -20.0 || sy > VIRTUAL_H as f32 + 20.0
+            {
+                continue;
+            }
+            ui.text(BUS_LINES[b.line_idx].number, sx + 1.0, sy + 4.0, 7.0,
+                Color::new(1.0, 0.85, 0.15, 1.0));
+        }
+
+        // --- Bus HUP! + Schimpfwort-Sprechblasen ---
+        for b in &self.buses {
+            let (sx, sy) = w2s(b.x, b.y);
+            if sx < -120.0 || sx > VIRTUAL_W as f32 + 20.0 {
+                continue;
+            }
+            if b.honk_t > 0.0 {
+                let alpha = (b.honk_t / 2.0).clamp(0.0, 1.0);
+                let bob = (self.game_seconds * 18.0).sin() * 0.8;
+                ui.rect(sx + 2.0, sy - 12.0 + bob, 24.0, 10.0,
+                    Color::new(0.0, 0.0, 0.0, 0.65 * alpha));
+                ui.text("HUP!", sx + 4.0, sy - 4.0 + bob, 9.0,
+                    Color::new(1.0, 0.85, 0.15, alpha));
+            }
+            if b.swear_t > 0.0 {
+                let alpha = (b.swear_t / 2.5).clamp(0.0, 1.0).powf(0.6);
+                let txt = b.swear_text.as_str();
+                let size = 9.0;
+                let tw = ui.text_w(txt, size);
+                let pad = 4.0;
+                let box_w = tw + pad * 2.0;
+                let box_h = size + 4.0;
+                // Blase oberhalb des Busses
+                ui.rect(sx + 1.0, sy - box_h - 6.0, box_w, box_h,
+                    Color::new(0.0, 0.0, 0.0, 0.0)); // shadow placeholder
+                // Schatten + Hintergrund
+                ui.rect(sx + 2.0, sy - box_h - 5.0, box_w, box_h,
+                    Color::new(0.0, 0.0, 0.0, 0.6 * alpha));
+                ui.rect(sx, sy - box_h - 7.0, box_w, box_h,
+                    Color::new(0.95, 0.92, 0.88, alpha));
+                ui.rect(sx, sy - box_h - 7.0, box_w, 1.5,
+                    Color::new(1.0, 1.0, 1.0, alpha));
+                // Schwänzchen
+                ui.rect(sx + 6.0, sy - 7.0, 2.0, 2.0,
+                    Color::new(0.95, 0.92, 0.88, alpha));
+                ui.text(txt, sx + pad, sy - box_h + size - 4.0, size,
+                    Color::new(0.55, 0.10, 0.10, alpha));
+            }
+        }
+
+        // --- Pedestrian-Sprechblasen (Säufer-Schimpfworte) ---
+        for p in &self.pedestrians {
+            if p.bubble_t <= 0.0 || p.bubble_text.is_empty() {
+                continue;
+            }
+            let (sx, sy) = w2s(p.aabb.x, p.aabb.y);
+            if sx < -100.0 || sx > VIRTUAL_W as f32 + 20.0 {
+                continue;
+            }
+            let alpha = (p.bubble_t / 2.0).clamp(0.0, 1.0).powf(0.6);
+            let txt = p.bubble_text.as_str();
+            let size = 9.0;
+            let tw = ui.text_w(txt, size);
+            let pad = 4.0;
+            let box_w = tw + pad * 2.0;
+            let box_h = size + 4.0;
+            // Schatten
+            ui.rect(sx + 2.0, sy - box_h - 4.0, box_w, box_h,
+                Color::new(0.0, 0.0, 0.0, 0.5 * alpha));
+            // Sprechblasen-Hintergrund (weiß)
+            ui.rect(sx, sy - box_h - 6.0, box_w, box_h,
+                Color::new(0.98, 0.95, 0.92, alpha));
+            ui.rect(sx, sy - box_h - 6.0, box_w, 1.5,
+                Color::new(1.0, 1.0, 1.0, alpha));
+            // Schwänzchen nach unten
+            ui.rect(sx + 4.0, sy - 6.0, 2.5, 2.5,
+                Color::new(0.98, 0.95, 0.92, alpha));
+            // Text (dunkelrot für Säufer)
+            ui.text(txt, sx + pad, sy - box_h + size - 5.0, size,
+                Color::new(0.55, 0.10, 0.10, alpha));
+        }
+
+        // --- "S8" auf der Lok ---
+        if self.train_phase != TrainPhase::Idle {
+            let train_world_y = TRAIN_TRACK_TILE_Y as f32 * TILE_SIZE;
+            let (sx, sy) = w2s(self.train_x + 6.0, train_world_y + 2.0);
+            if sx > -20.0 && sx < VIRTUAL_W as f32 + 20.0 {
+                ui.text("S8", sx, sy + 9.0, 9.0,
+                    Color::new(1.0, 0.95, 0.55, 1.0));
+            }
+        }
+    }
+
+    /// Zeigt einen Pfeil am Bildschirmrand Richtung Klaus, falls offscreen.
+    fn draw_offscreen_klaus_arrow(&self, ui: &ui::UiCtx) {
+        let mut klaus_pos: Option<(f32, f32)> = None;
+        for n in &self.npcs {
+            if n.kind == npc::NpcKind::Klaus {
+                klaus_pos = Some((n.aabb.x + 6.0, n.aabb.y + 7.0));
+            }
+        }
+        let Some((kx, ky)) = klaus_pos else { return };
+        let (sx, sy) = self.cam.world_to_screen(kx, ky);
+        // Bereits sichtbar?
+        if sx > 0.0 && sx < VIRTUAL_W as f32 && sy > 0.0 && sy < VIRTUAL_H as f32 {
+            return;
+        }
+        let cx = VIRTUAL_W as f32 / 2.0;
+        let cy = VIRTUAL_H as f32 / 2.0;
+        let dx = sx - cx;
+        let dy = sy - cy;
+        // Clamp auf einen Kreis am Rand
+        let max_d = 120.0;
+        let d = (dx * dx + dy * dy).sqrt().max(0.001);
+        let scale = max_d / d;
+        let ax = cx + dx * scale;
+        let ay = cy + dy * scale;
+        ui.rect(ax - 8.0, ay - 7.0, 60.0, 14.0,
+            Color::new(0.0, 0.0, 0.0, 0.75));
+        ui.text("Klaus →", ax - 6.0, ay + 4.0, 11.0,
+            Color::new(1.0, 0.85, 0.15, 1.0));
     }
 
     /// Render-Pass auf den echten Bildschirm — gestochen scharfer UI-Text.
@@ -1678,6 +3193,8 @@ impl Game {
                 ui::draw_victory(ui, self.victory_scroll);
             }
             _ => {
+                // Welt-Labels (Stadthalle, Polariom, IHLE…) — gestochen scharf
+                self.draw_world_labels(ui);
                 if let Some(b) = &self.boss {
                     if b.alive() {
                         ui::draw_boss_bar(ui, b.hp, BOSS_HP_MAX, b.current_taunt, b.taunt_t);
@@ -1706,7 +3223,7 @@ impl Game {
                     ui::draw_minimap(ui, &self.world, &self.player);
                 }
                 if matches!(self.state, GameState::Paused) {
-                    ui::draw_paused(ui);
+                    ui::draw_paused(ui, self.pause_cursor);
                 }
                 if matches!(self.state, GameState::Shopping) {
                     if let Some(s) = &self.shop {
@@ -1724,6 +3241,71 @@ impl Game {
             }
         }
     }
+}
+
+/// Spawnt ~20 wandernde NPCs verteilt über die Stadt.
+/// 13 freundliche Bürger + 7 Säufer in Cordobar / Stadtmitte / Stadtpark.
+fn spawn_pedestrians() -> Vec<Pedestrian> {
+    let outfits: [Color; 6] = [
+        Color::new(0.85, 0.20, 0.20, 1.0),
+        Color::new(0.20, 0.45, 0.85, 1.0),
+        Color::new(0.30, 0.70, 0.30, 1.0),
+        Color::new(0.85, 0.60, 0.20, 1.0),
+        Color::new(0.65, 0.40, 0.75, 1.0),
+        Color::new(0.40, 0.30, 0.20, 1.0),
+    ];
+
+    // (tx, ty, kind) — mehr Bürger, deutlich weniger Säufer (3, nur an Cordobar)
+    let pos: &[(f32, f32, PedKind)] = &[
+        // Friedenstr. / Stadtmitte
+        (88.0, 64.0, PedKind::Citizen),
+        (97.0, 67.0, PedKind::Citizen),
+        (104.0, 73.0, PedKind::Citizen),
+        (112.0, 65.0, PedKind::Citizen),
+        (95.0, 81.0, PedKind::Citizen),
+        (88.0, 84.0, PedKind::Citizen),
+        // GEP
+        (40.0, 56.0, PedKind::Citizen),
+        (47.0, 70.0, PedKind::Citizen),
+        (35.0, 64.0, PedKind::Citizen),
+        // Bahnhof
+        (100.0, 22.0, PedKind::Citizen),
+        (118.0, 22.0, PedKind::Citizen),
+        (90.0, 25.0, PedKind::Citizen),
+        (112.0, 30.0, PedKind::Citizen),
+        // Stadtpark
+        (115.0, 40.0, PedKind::Citizen),
+        (122.0, 45.0, PedKind::Citizen),
+        (105.0, 38.0, PedKind::Citizen),
+        // Cewestr
+        (170.0, 35.0, PedKind::Citizen),
+        (180.0, 30.0, PedKind::Citizen),
+        // Polariom-Umgebung
+        (148.0, 85.0, PedKind::Citizen),
+        // Parsberg
+        (15.0, 70.0, PedKind::Citizen),
+        // Säufer: NUR an der Cordobar-Ruine (klassischer Treffpunkt)
+        (22.0, 100.0, PedKind::Drunk),
+        (28.0, 104.0, PedKind::Drunk),
+        (16.0, 107.0, PedKind::Drunk),
+    ];
+
+    let mut peds = Vec::new();
+    for (i, &(tx, ty, kind)) in pos.iter().enumerate() {
+        peds.push(Pedestrian {
+            kind,
+            aabb: Aabb::new(tx * TILE_SIZE, ty * TILE_SIZE, 12.0, 14.0),
+            vx: 0.0,
+            vy: 0.0,
+            wander_t: 0.0,
+            hit_cool: 0.0,
+            phase: i as f32 * 0.73,
+            bubble_t: 0.0,
+            bubble_text: String::new(),
+            tint: outfits[i % outfits.len()],
+        });
+    }
+    peds
 }
 
 // ------------------------------------------------------------------------
@@ -1759,7 +3341,8 @@ async fn main() {
         let frame_start = std::time::Instant::now();
         let dt = get_frame_time().min(0.05);
 
-        // ESC schließt nur im Hauptmenü oder Pause
+        // ESC: Hauptmenü = beenden, Spielen = pausieren, Pause = weiterspielen
+        // update_paused fängt ESC selbst NICHT mehr ab — sonst Race-Condition.
         if is_key_pressed(KeyCode::Escape) {
             match game.state {
                 GameState::TitleMenu => {
@@ -1767,6 +3350,11 @@ async fn main() {
                 }
                 GameState::Playing => {
                     game.state = GameState::Paused;
+                    game.pause_cursor = 0;
+                }
+                GameState::Paused => {
+                    game.state = GameState::Playing;
+                    game.pause_cursor = 0;
                 }
                 _ => {}
             }

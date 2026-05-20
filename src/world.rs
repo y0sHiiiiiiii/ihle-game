@@ -23,6 +23,7 @@ pub enum Tile {
     BossFloor,
     MoldSlow,
     Brunnen,
+    Zebra,
 }
 
 impl Tile {
@@ -44,6 +45,16 @@ impl Tile {
 
     pub fn is_slow(&self) -> bool {
         matches!(self, Tile::MoldSlow)
+    }
+
+    /// Fahrzeuge stoppen, wenn ein Fußgänger einen Zebrastreifen quert.
+    pub fn is_zebra(&self) -> bool {
+        matches!(self, Tile::Zebra)
+    }
+
+    /// Fahrzeuge fahren auf Road / RedThread / Zebra.
+    pub fn is_drivable(&self) -> bool {
+        matches!(self, Tile::Road | Tile::RedThread | Tile::Zebra)
     }
 }
 
@@ -74,22 +85,27 @@ impl Area {
 
 pub fn areas() -> Vec<Area> {
     vec![
-        Area { name: AREA_GERMSEE,    x0: 5,   y0: 5,   x1: 55,  y1: 40  },
-        Area { name: AREA_BAHNHOF,    x0: 95,  y0: 5,   x1: 130, y1: 25  },
-        Area { name: AREA_WWK,        x0: 60,  y0: 5,   x1: 90,  y1: 28  },
-        Area { name: AREA_CEWESTR,    x0: 160, y0: 20,  x1: 200, y1: 45  },
+        // See nach Süd-West verschoben, damit Gleise (y=14) frei sind.
+        Area { name: AREA_GERMSEE,    x0: 5,   y0: 22,  x1: 50,  y1: 55  },
+        Area { name: AREA_HARTHAUS,   x0: 55,  y0: 5,   x1: 88,  y1: 22  },
+        Area { name: AREA_WWK,        x0: 55,  y0: 22,  x1: 88,  y1: 35  },
+        Area { name: AREA_BAHNHOF,    x0: 105, y0: 5,   x1: 138, y1: 22  },
+        Area { name: AREA_CEWESTR,    x0: 155, y0: 5,   x1: 200, y1: 35  },
         Area { name: AREA_STADTPARK,  x0: 90,  y0: 30,  x1: 130, y1: 50  },
-        Area { name: AREA_PARSBERG,   x0: 5,   y0: 55,  x1: 30,  y1: 85  },
-        Area { name: AREA_GEP,        x0: 40,  y0: 50,  x1: 70,  y1: 75  },
-        Area { name: AREA_STADTHALLE, x0: 75,  y0: 50,  x1: 95,  y1: 65  },
-        Area { name: AREA_STADTMITTE, x0: 80,  y0: 50,  x1: 130, y1: 80  },
-        Area { name: AREA_MUSEUM,     x0: 110, y0: 53,  x1: 130, y1: 65  },
-        Area { name: AREA_FRIEDENSTR, x0: 90,  y0: 65,  x1: 120, y1: 90  },
-        Area { name: AREA_FREIBAD,    x0: 130, y0: 50,  x1: 155, y1: 75  },
-        Area { name: AREA_POLARIOM,   x0: 155, y0: 75,  x1: 195, y1: 100 },
-        Area { name: AREA_KAUFHOF,    x0: 85,  y0: 85,  x1: 115, y1: 105 },
-        Area { name: AREA_CORDOBAR,   x0: 10,  y0: 90,  x1: 40,  y1: 120 },
-        Area { name: AREA_FORST,      x0: 30,  y0: 95,  x1: 150, y1: 120 },
+        Area { name: AREA_RATHAUS,    x0: 95,  y0: 50,  x1: 115, y1: 62  },
+        Area { name: AREA_PARSBERG,   x0: 5,   y0: 58,  x1: 30,  y1: 88  },
+        Area { name: AREA_GEP,        x0: 35,  y0: 50,  x1: 68,  y1: 78  },
+        Area { name: AREA_STADTHALLE, x0: 72,  y0: 50,  x1: 92,  y1: 62  },
+        Area { name: AREA_STADTMITTE, x0: 80,  y0: 50,  x1: 135, y1: 80  },
+        Area { name: AREA_SCHULE,     x0: 118, y0: 50,  x1: 138, y1: 62  },
+        Area { name: AREA_MUSEUM,     x0: 113, y0: 62,  x1: 132, y1: 75  },
+        Area { name: AREA_FRIEDENSTR, x0: 88,  y0: 65,  x1: 122, y1: 92  },
+        Area { name: AREA_FREIBAD,    x0: 135, y0: 50,  x1: 158, y1: 75  },
+        Area { name: AREA_KRANKENHAUS,x0: 158, y0: 50,  x1: 178, y1: 70  },
+        Area { name: AREA_POLARIOM,   x0: 158, y0: 75,  x1: 198, y1: 100 },
+        Area { name: AREA_KAUFHOF,    x0: 85,  y0: 90,  x1: 115, y1: 108 },
+        Area { name: AREA_CORDOBAR,   x0: 8,   y0: 92,  x1: 40,  y1: 120 },
+        Area { name: AREA_FORST,      x0: 40,  y0: 95,  x1: 150, y1: 120 },
     ]
 }
 
@@ -97,11 +113,44 @@ pub fn areas() -> Vec<Area> {
 //  World
 // ------------------------------------------------------------------------
 
+// ------------------------------------------------------------------------
+//  Building-Variety — pro Gebäude wird ein Kind bestimmt für sichtbare
+//  Vielfalt (Dachform, Farbe, Fensteranordnung, Sondernutzung).
+// ------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuildingKind {
+    House,         // Einfamilienhaus, rotes Satteldach
+    Reihenhaus,    // Reihenhausreihe, beige Wand
+    Apartment,     // Mehrfamilien, flaches Dach
+    Highrise,      // WWK-Hochhaus
+    Shop,          // Ladengeschäft, große Fenster
+    Industrial,    // Halle (Cewestr) flach + grau
+    Rathaus,       // Rathaus mit Turm
+    Schule,        // Schule, hell + Glockenturm
+    Krankenhaus,   // weißer Bau mit rotem Kreuz
+    Tankstelle,    // breite flache Tankstelle
+    Ruin,          // Cordobar-Ruine
+    Kirche,        // St. Jakobskirche
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Building {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub kind: BuildingKind,
+    /// Palette-Seed für deterministisch unterschiedliche Farben.
+    pub seed: u32,
+}
+
 pub struct World {
     pub tiles: Vec<Tile>,
     pub w: i32,
     pub h: i32,
     pub areas: Vec<Area>,
+    pub buildings: Vec<Building>,
 }
 
 impl World {
@@ -135,46 +184,44 @@ impl World {
         }
 
         // 2) Strand um den See
-        let lake = &areas[0];
-        for y in (lake.y0 - 1).max(0)..(lake.y1 + 1).min(h) {
-            for x in (lake.x0 - 1).max(0)..(lake.x1 + 1).min(w) {
-                if tiles[idx(x, y)] == Tile::Grass {
-                    // Nur am Rand vom See → Sand
-                    let mut neighbor_water = false;
-                    for dy in -1..=1 {
-                        for dx in -1..=1 {
-                            let nx = x + dx;
-                            let ny = y + dy;
-                            if nx >= 0 && ny >= 0 && nx < w && ny < h
-                                && tiles[idx(nx, ny)] == Tile::Water
-                            {
-                                neighbor_water = true;
-                            }
+        for y in 21..56 {
+            for x in 4..51 {
+                if y < 0 || y >= h || x < 0 || x >= w { continue; }
+                if tiles[idx(x, y)] != Tile::Grass { continue; }
+                let mut neighbor_water = false;
+                'scan: for dy in -1..=1 {
+                    for dx in -1..=1 {
+                        let nx = x + dx;
+                        let ny = y + dy;
+                        if nx >= 0 && ny >= 0 && nx < w && ny < h
+                            && tiles[idx(nx, ny)] == Tile::Water
+                        {
+                            neighbor_water = true;
+                            break 'scan;
                         }
                     }
-                    if neighbor_water {
-                        tiles[idx(x, y)] = Tile::Sand;
-                    }
+                }
+                if neighbor_water {
+                    tiles[idx(x, y)] = Tile::Sand;
                 }
             }
         }
 
-        // 3) Freibad-Innenpool (kleines Wasser in Sand)
-        for y in 55..70 {
-            for x in 135..150 {
+        // 3) Freibad-Innenpool — neue Position passend zu AREA_FREIBAD (x=135..158, y=50..75)
+        for y in 56..72 {
+            for x in 138..156 {
                 if tiles[idx(x, y)] == Tile::Sand {
                     tiles[idx(x, y)] = Tile::Water;
                 }
             }
         }
-        // Rand wieder Sand
-        for y in 54..71 {
-            tiles[idx(135, y)] = Tile::Sand;
-            tiles[idx(149, y)] = Tile::Sand;
+        for y in 55..73 {
+            tiles[idx(138, y)] = Tile::Sand;
+            tiles[idx(155, y)] = Tile::Sand;
         }
-        for x in 135..150 {
-            tiles[idx(x, 55)] = Tile::Sand;
-            tiles[idx(x, 69)] = Tile::Sand;
+        for x in 138..156 {
+            tiles[idx(x, 56)] = Tile::Sand;
+            tiles[idx(x, 71)] = Tile::Sand;
         }
 
         // 4) Straßennetz — horizontal & vertikal
@@ -182,10 +229,7 @@ impl World {
         let v_roads = [25, 50, 75, 105, 130, 160];
         for &y in &h_roads {
             for x in 0..w {
-                if tiles[idx(x, y)] == Tile::Grass
-                    || tiles[idx(x, y)] == Tile::Dirt
-                    || tiles[idx(x, y)] == Tile::Forest
-                {
+                if matches!(tiles[idx(x, y)], Tile::Grass | Tile::Dirt | Tile::Forest) {
                     tiles[idx(x, y)] = Tile::Road;
                     if y + 1 < h && tiles[idx(x, y + 1)] != Tile::Water {
                         tiles[idx(x, y + 1)] = Tile::Sidewalk;
@@ -198,43 +242,42 @@ impl World {
         }
         for &x in &v_roads {
             for y in 0..h {
-                if tiles[idx(x, y)] == Tile::Grass
-                    || tiles[idx(x, y)] == Tile::Dirt
-                    || tiles[idx(x, y)] == Tile::Forest
-                    || tiles[idx(x, y)] == Tile::Sidewalk
-                {
+                if matches!(
+                    tiles[idx(x, y)],
+                    Tile::Grass | Tile::Dirt | Tile::Forest | Tile::Sidewalk
+                ) {
                     tiles[idx(x, y)] = Tile::Road;
-                    if x + 1 < w && tiles[idx(x + 1, y)] != Tile::Water {
-                        if tiles[idx(x + 1, y)] != Tile::Road {
-                            tiles[idx(x + 1, y)] = Tile::Sidewalk;
-                        }
+                    if x + 1 < w && tiles[idx(x + 1, y)] != Tile::Water
+                        && tiles[idx(x + 1, y)] != Tile::Road
+                    {
+                        tiles[idx(x + 1, y)] = Tile::Sidewalk;
                     }
-                    if x > 0 && tiles[idx(x - 1, y)] != Tile::Water {
-                        if tiles[idx(x - 1, y)] != Tile::Road {
-                            tiles[idx(x - 1, y)] = Tile::Sidewalk;
-                        }
+                    if x > 0 && tiles[idx(x - 1, y)] != Tile::Water
+                        && tiles[idx(x - 1, y)] != Tile::Road
+                    {
+                        tiles[idx(x - 1, y)] = Tile::Sidewalk;
                     }
                 }
             }
         }
 
-        // 5) Roter Faden — folgt von Filiale 1 → 2 → 3 → 4
-        // Pfad-Punkte (Tile-Koordinaten)
+        // 5) Roter Faden — folgt von Filiale 1 → 2 → 3 → 4 (neue Positionen)
         let red_path: &[(i32, i32)] = &[
             (100, 70), // Filiale 1 (Friedenstr.)
             (100, 60),
-            (90, 60),
             (75, 60),
-            (55, 60), // Filiale 2 (GEP)
+            (50, 60),
+            (45, 67),  // Filiale 2 (GEP)
+            (50, 60),
             (75, 60),
-            (95, 60),
-            (110, 60),
-            (110, 40),
-            (110, 25),
-            (110, 18), // Filiale 3 (Bahnhof)
-            (130, 25),
-            (160, 25),
-            (170, 28), // Filiale 4 (Cewestr.)
+            (105, 60),
+            (105, 40),
+            (105, 20),
+            (118, 20),
+            (118, 26), // Filiale 3 (Bahnhof)
+            (130, 20),
+            (160, 20),
+            (168, 28), // Filiale 4 (Cewestr.)
         ];
         for win in red_path.windows(2) {
             let (mut x, mut y) = win[0];
@@ -242,7 +285,7 @@ impl World {
             while x != tx || y != ty {
                 if x >= 0 && y >= 0 && x < w && y < h {
                     let t = tiles[idx(x, y)];
-                    if t == Tile::Sidewalk || t == Tile::Road || t == Tile::Grass {
+                    if matches!(t, Tile::Sidewalk | Tile::Road | Tile::Grass) {
                         tiles[idx(x, y)] = Tile::RedThread;
                     }
                 }
@@ -251,40 +294,121 @@ impl World {
             }
         }
 
-        // 6) Gebäude in Stadtgebieten — sauber zwischen die Straßen gesetzt.
-        //    h_roads: y=20,40,60,80,100  ·  v_roads: x=25,50,75,105,130,160
-        //    Jedes Gebäude liegt komplett in einem Block zwischen zwei Straßen.
-        let buildings: &[(i32, i32, i32, i32)] = &[
-            // WWK Hochhäuser (Block y=5..18, zwischen x=52..73, oberhalb y=20-Straße)
-            (54, 7, 4, 12), (60, 5, 4, 13), (66, 8, 5, 11),
-            // Bahnhof — Bahnsteig-Gebäude (zwischen v=75 und v=105, y=8..18)
-            (78, 8, 5, 11), (85, 10, 5, 9), (92, 8, 5, 11), (99, 10, 5, 9),
-            // weitere Bahnhof-Gebäude (zwischen v=105 und v=130, y=8..18)
-            (108, 8, 5, 11), (115, 10, 6, 9), (123, 8, 5, 11),
-            // GEP-Einkaufszentrum (zwischen v=25..50, y=52..58 oberhalb y=60-Straße)
-            (28, 52, 6, 7), (36, 52, 5, 7), (43, 52, 5, 7),
-            // GEP süd (y=62..73, zwischen v=25..50)
-            (28, 62, 6, 8), (36, 62, 5, 8), (43, 64, 5, 8),
-            // Stadthalle (zwischen v=75..105, y=52..58)
-            (77, 52, 7, 7), (86, 52, 6, 7), (94, 52, 5, 7),
-            // Stadtmuseum ZEIT+RAUM (zwischen v=105..130, y=52..58)
-            (108, 52, 6, 7), (116, 52, 6, 7),
-            // St. Jakobskirche neben dem Jakobusbrunnen (Brunnen liegt bei 115,35)
-            (113, 30, 5, 5),
-            // Stadtmitte Wohnhäuser (zwischen y=62..78, zwischen v=75..105)
-            (78, 63, 4, 5), (85, 63, 4, 5), (92, 63, 4, 5), (99, 63, 4, 5),
-            (78, 71, 5, 7), (86, 71, 5, 7), (94, 73, 5, 5),
-            // Cewestr Gewerbe (zwischen v=160 und Map-Rand, y=22..38)
-            (162, 22, 6, 7), (170, 22, 6, 7), (178, 22, 6, 7), (186, 22, 6, 7),
-            (162, 31, 6, 8), (170, 31, 6, 8), (178, 31, 6, 8), (186, 31, 6, 8),
-            // Cordobar Ruine (zerfallene Gebäude in Cordobar-Area, abseits der Straßen)
-            (14, 92, 4, 4), (20, 95, 3, 3), (29, 92, 4, 5), (15, 102, 4, 3),
-        ];
-        for &(bx, by, bw, bh) in buildings {
-            for y in by..(by + bh).min(h) {
-                for x in bx..(bx + bw).min(w) {
+        // 6) Gebäude — mit Sortenvielfalt
+        let mut buildings: Vec<Building> = Vec::new();
+
+        fn push_b(
+            out: &mut Vec<Building>,
+            x: i32, y: i32, w: i32, h: i32,
+            kind: BuildingKind,
+        ) {
+            let seed = (x.wrapping_mul(1973).wrapping_add(y.wrapping_mul(401)).wrapping_add(w * 31 + h * 17)) as u32;
+            out.push(Building { x, y, w, h, kind, seed });
+        }
+
+        fn add_row(
+            out: &mut Vec<Building>,
+            x0: i32, y: i32, count: i32, unit_w: i32, house_h: i32, gap: i32,
+            kind: BuildingKind,
+        ) {
+            for i in 0..count {
+                let bx = x0 + i * (unit_w + gap);
+                push_b(out, bx, y, unit_w, house_h, kind);
+            }
+        }
+
+        // === Bahnhof Germering Empfangsgebäude (y=6..12, x=105..138) ===
+        push_b(&mut buildings, 108, 6, 10, 6, BuildingKind::Shop);     // Bahnhofsgebäude
+        push_b(&mut buildings, 123, 6, 8, 5, BuildingKind::Shop);      // Kiosk / DB Service
+
+        // === Bahnhof Harthaus Empfangsgebäude (x=60..78, y=6..12) ===
+        push_b(&mut buildings, 62, 7, 7, 5, BuildingKind::Shop);
+        push_b(&mut buildings, 71, 8, 5, 4, BuildingKind::Shop);
+
+        // === WWK Hochhaussiedlung (südl. der Gleise, y=24..34, x=56..86) ===
+        push_b(&mut buildings, 56, 24, 5, 10, BuildingKind::Highrise);
+        push_b(&mut buildings, 63, 23, 5, 11, BuildingKind::Highrise);
+        push_b(&mut buildings, 70, 24, 5, 10, BuildingKind::Highrise);
+        push_b(&mut buildings, 77, 23, 5, 11, BuildingKind::Highrise);
+        push_b(&mut buildings, 84, 25, 4, 9, BuildingKind::Apartment);
+
+        // === Zwischen Bahnhof und Stadtmitte (Wohnblöcke y=22..38) ===
+        add_row(&mut buildings, 90, 22, 4, 5, 6, 1, BuildingKind::House);
+        add_row(&mut buildings, 90, 32, 4, 5, 6, 1, BuildingKind::House);
+        add_row(&mut buildings, 113, 22, 3, 5, 6, 1, BuildingKind::Reihenhaus);
+        add_row(&mut buildings, 113, 32, 3, 5, 6, 1, BuildingKind::Reihenhaus);
+        add_row(&mut buildings, 132, 22, 3, 7, 7, 1, BuildingKind::Apartment);
+        add_row(&mut buildings, 132, 32, 3, 7, 7, 1, BuildingKind::Apartment);
+
+        // === Cewestraße Gewerbe (y=21..38, x=161..199) ===
+        push_b(&mut buildings, 161, 22, 11, 7, BuildingKind::Industrial); // Halle 1
+        push_b(&mut buildings, 173, 22, 11, 7, BuildingKind::Industrial); // Halle 2
+        push_b(&mut buildings, 185, 22, 12, 7, BuildingKind::Industrial); // Halle 3
+        push_b(&mut buildings, 161, 31, 8, 7, BuildingKind::Industrial);  // Halle 4
+        push_b(&mut buildings, 172, 31, 12, 7, BuildingKind::Shop);       // Großhandel
+        push_b(&mut buildings, 187, 31, 10, 7, BuildingKind::Tankstelle); // Tankstelle Cewestr
+
+        // === GEP Einkaufspassagen (y=41..78, x=36..68) ===
+        push_b(&mut buildings, 36, 42, 13, 8, BuildingKind::Shop);     // GEP-Mall West
+        push_b(&mut buildings, 52, 42, 14, 8, BuildingKind::Shop);     // GEP-Mall Ost
+        add_row(&mut buildings, 36, 53, 3, 6, 6, 1, BuildingKind::Apartment);
+        // Filiale 2 Block (Mitte): bleibt frei für IhleWall
+        add_row(&mut buildings, 36, 72, 3, 6, 5, 1, BuildingKind::Apartment);
+
+        // === Stadthalle (y=41..58, x=72..91) ===
+        push_b(&mut buildings, 73, 42, 17, 7, BuildingKind::Rathaus);  // Stadthalle (großer Bau)
+        add_row(&mut buildings, 73, 53, 3, 5, 6, 1, BuildingKind::House);
+
+        // === Rathaus-Block (y=41..58, x=95..114) ===
+        push_b(&mut buildings, 96, 52, 14, 7, BuildingKind::Rathaus);
+
+        // === Schule (y=41..58, x=118..138) ===
+        push_b(&mut buildings, 119, 52, 17, 8, BuildingKind::Schule);
+
+        // === Stadtmuseum / Kirchen-Block (y=63..75, x=113..132) ===
+        push_b(&mut buildings, 115, 63, 14, 8, BuildingKind::Shop); // Museum
+
+        // === St. Jakobskirche (im Stadtpark) ===
+        push_b(&mut buildings, 113, 31, 5, 5, BuildingKind::Kirche);
+
+        // === Klinikum (y=51..68, x=158..178) ===
+        push_b(&mut buildings, 159, 52, 17, 8, BuildingKind::Krankenhaus);
+        push_b(&mut buildings, 159, 62, 18, 6, BuildingKind::Apartment); // Pflege-Wohnheim
+
+        // === Freibad-Umgebung (y=41..58, x=131..158) ===
+        add_row(&mut buildings, 131, 42, 3, 5, 6, 1, BuildingKind::House);
+
+        // === Stadtmitte Wohnhäuser (y=62..78) — variiert ===
+        add_row(&mut buildings, 80, 62, 3, 5, 6, 1, BuildingKind::Reihenhaus);
+        add_row(&mut buildings, 80, 71, 3, 5, 6, 1, BuildingKind::Reihenhaus);
+        // Filiale 1 ist in der Friedenstraße bei (100, 70)
+
+        // === Friedenstr. Süd (y=82..98) ===
+        add_row(&mut buildings, 78, 82, 4, 5, 6, 1, BuildingKind::House);
+        add_row(&mut buildings, 78, 92, 4, 5, 6, 1, BuildingKind::House);
+        add_row(&mut buildings, 108, 82, 2, 6, 6, 1, BuildingKind::Apartment);
+        add_row(&mut buildings, 108, 92, 2, 6, 6, 1, BuildingKind::Apartment);
+
+        // === Parsberg Siedlung (Waldrand) ===
+        add_row(&mut buildings, 10, 67, 3, 4, 4, 1, BuildingKind::House);
+        add_row(&mut buildings, 10, 73, 3, 4, 4, 1, BuildingKind::House);
+
+        // === Polariom-Umgebung ===
+        add_row(&mut buildings, 134, 82, 3, 6, 6, 1, BuildingKind::Apartment);
+        add_row(&mut buildings, 161, 82, 3, 6, 6, 1, BuildingKind::Apartment);
+        push_b(&mut buildings, 178, 82, 16, 7, BuildingKind::Shop); // Eisarena-Foyer
+
+        // === Cordobar Ruine ===
+        push_b(&mut buildings, 14, 92, 4, 4, BuildingKind::Ruin);
+        push_b(&mut buildings, 21, 95, 3, 3, BuildingKind::Ruin);
+        push_b(&mut buildings, 29, 92, 4, 5, BuildingKind::Ruin);
+        push_b(&mut buildings, 15, 102, 4, 3, BuildingKind::Ruin);
+
+        // Gebäude in die Tile-Map einbacken
+        for b in &buildings {
+            for y in b.y..(b.y + b.h).min(h) {
+                for x in b.x..(b.x + b.w).min(w) {
                     if y < h && x < w {
-                        // NIEMALS Straßen oder Gehsteige überschreiben.
                         let cur = tiles[idx(x, y)];
                         if matches!(cur, Tile::Road | Tile::Sidewalk) {
                             continue;
@@ -314,29 +438,34 @@ impl World {
             }
         }
 
-        // 8) Germarbrunnen in der Stadtmitte
-        if 100 < w && 65 < h {
-            tiles[idx(100, 60)] = Tile::Brunnen;
-        }
+        // 8) Brunnen / Landmarks
+        // Germarbrunnen vor dem Rathaus
+        tiles[idx(105, 50)] = Tile::Brunnen;
+        // Cordobar-Easter-Egg
+        tiles[idx(20, 105)] = Tile::Brunnen;
+        // Jakobusbrunnen (Stadtpark)
+        tiles[idx(115, 35)] = Tile::Brunnen;
+        // Mariensäule (Augsburger Straße — wir nehmen Stadtmitte-Position)
+        tiles[idx(85, 65)] = Tile::Brunnen;
+        // Römischer Ziegelbrennofen
+        tiles[idx(8, 54)] = Tile::Brunnen;
 
         // 9) Boss-Kaufhof Eingang
         for x in 95..105 {
-            tiles[idx(x, 86)] = Tile::Sidewalk;
+            tiles[idx(x, 89)] = Tile::Sidewalk;
         }
 
-        // 10) Cordobar-Easter-Egg-Schild (als Brunnen-Marker)
-        tiles[idx(20, 105)] = Tile::Brunnen;
+        // 10) Zebrastreifen — auf Road-Tiles platzieren
+        for &(zx, zy) in ZEBRA_TILES.iter() {
+            if zx >= 0 && zy >= 0 && zx < w && zy < h {
+                if matches!(tiles[idx(zx, zy)], Tile::Road | Tile::RedThread) {
+                    tiles[idx(zx, zy)] = Tile::Zebra;
+                }
+                // Sidewalks links/rechts klar markieren (bleibt Sidewalk)
+            }
+        }
 
-        // 11) Jakobusbrunnen (Stadtpark)
-        tiles[idx(115, 35)] = Tile::Brunnen;
-
-        // 12) Mariensäule (Augsburger Straße — wir nehmen Stadtmitte-Position)
-        tiles[idx(85, 65)] = Tile::Brunnen;
-
-        // 13) Römischer Ziegelbrennofen (Richtung Alling — Westrand)
-        tiles[idx(8, 50)] = Tile::Brunnen;
-
-        World { tiles, w, h, areas }
+        World { tiles, w, h, areas, buildings }
     }
 
     pub fn get(&self, x: i32, y: i32) -> Tile {

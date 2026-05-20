@@ -59,6 +59,7 @@ pub struct Textures {
     pub tile_bossfloor: Texture2D,
     pub tile_moldslow: Texture2D,
     pub tile_brunnen: Texture2D,
+    pub tile_zebra: Texture2D,
     pub crystal: Texture2D,
 }
 
@@ -79,6 +80,7 @@ impl Textures {
             Tile::BossFloor => &self.tile_bossfloor,
             Tile::MoldSlow => &self.tile_moldslow,
             Tile::Brunnen => &self.tile_brunnen,
+            Tile::Zebra => &self.tile_zebra,
         }
     }
 }
@@ -385,6 +387,7 @@ pub fn draw_minimap(ui: &UiCtx, world: &World, player: &Player) {
                 Tile::Brunnen => Color::new(0.55, 0.40, 0.18, 1.0),
                 Tile::Dirt => Color::new(0.55, 0.35, 0.20, 1.0),
                 Tile::MoldSlow => Color::new(0.16, 0.40, 0.18, 1.0),
+                Tile::Zebra => Color::new(0.90, 0.90, 0.90, 1.0),
             };
             ui.rect(mx + x as f32 * sx, my + y as f32 * sy, sx.ceil(), sy.ceil(), col);
         }
@@ -638,14 +641,35 @@ pub fn draw_title_menu(ui: &UiCtx, cursor: usize, has_save: bool) {
     ui.text(foot2, cx - f2w / 2.0, 262.0, 9.0, Color::new(0.7, 0.7, 0.7, 1.0));
 }
 
-pub fn draw_paused(ui: &UiCtx) {
-    ui.fullscreen_rect(Color::new(0.0, 0.0, 0.0, 0.7));
+pub fn draw_paused(ui: &UiCtx, cursor: usize) {
+    ui.fullscreen_rect(Color::new(0.0, 0.0, 0.0, 0.75));
     let s = "PAUSE";
     let tw = ui.text_w(s, 28.0);
-    ui.text(s, VIRTUAL_W as f32 / 2.0 - tw / 2.0, VIRTUAL_H as f32 / 2.0, 28.0, WHITE);
-    let s2 = "[P] weiter   [ESC] beenden";
-    let tw2 = ui.text_w(s2, 11.0);
-    ui.text(s2, VIRTUAL_W as f32 / 2.0 - tw2 / 2.0, VIRTUAL_H as f32 / 2.0 + 20.0, 11.0, WHITE);
+    ui.text(
+        s,
+        VIRTUAL_W as f32 / 2.0 - tw / 2.0,
+        VIRTUAL_H as f32 / 2.0 - 50.0,
+        28.0,
+        Color::new(1.0, 0.85, 0.15, 1.0),
+    );
+    let items = ["Weiter", "Respawn am Checkpoint", "Speichern", "Hauptmenü"];
+    let cx = VIRTUAL_W as f32 / 2.0;
+    let mut y = VIRTUAL_H as f32 / 2.0 - 14.0;
+    for (i, it) in items.iter().enumerate() {
+        let (prefix, col) = if i == cursor {
+            ("> ", Color::new(1.0, 0.85, 0.15, 1.0))
+        } else {
+            ("  ", WHITE)
+        };
+        let label = format!("{}{}", prefix, it);
+        let lw = ui.text_w(&label, 13.0);
+        ui.text(&label, cx - lw / 2.0, y, 13.0, col);
+        y += 18.0;
+    }
+    let foot = "[W/S] wählen  [ENTER] OK  [P] schnell weiter";
+    let fw = ui.text_w(foot, 9.0);
+    ui.text(foot, cx - fw / 2.0, VIRTUAL_H as f32 - 18.0, 9.0,
+        Color::new(0.7, 0.7, 0.7, 1.0));
 }
 
 pub fn draw_gameover(ui: &UiCtx) {
