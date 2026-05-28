@@ -1,269 +1,132 @@
-# 🥨 GERMERING QUEST — Die Schimmel-Invasion
+# Germering Delivery
 
-> *"Mir ghört Germering!" — Die Schimmel-Gang*
+Pixelart 2D Top-Down Highscore-Spiel in Rust + Bevy.
+Du fährst einen weißen Ihle-Sprinter durch Germering bei München und lieferst
+Pakete von einer von vier Ihle-Filialen an Kundenadressen aus.
 
-Ein 2D-Pixel-Art-Open-World-RPG, das komplett in **Germering, Landkreis Fürstenfeldbruck**
-spielt. Komplett in Rust geschrieben, läuft fullscreen auf jeder Auflösung, **out of the box**
-ohne externe Assets. Echte Orte. Echte Bäckerei. Eine sehr fragwürdige Pilz-Invasion.
+## Spielziel
 
----
+Liefere so viele Pakete wie möglich aus, bevor drei Kunden zu lange auf
+ihre Bestellung warten mussten. Je weniger Zeit du brauchst, desto mehr
+Punkte und Münzen gibt es. Fahre sauber und schnell, um deinen **Nitro**
+aufzuladen, und halte deine **Streak** am Leben, damit der Multiplikator
+explodiert. Münzen kannst du bei Jannicks Kölnem Eck in Pizza oder Kaffee
+umtauschen — beides gibt einen zusätzlichen Speed-Boost.
 
-## 📖 DIE GESCHICHTE
-
-**Germering, 2025. Früh morgens, 5:47 Uhr.**
-
-Du bist **Max Huber**, 17, Bäckerlehrling im dritten Ausbildungsjahr bei der
-Landbäckerei Ihle an der **Friedenstraße 19a**. Wie jeden Morgen kommst du
-zur Arbeit, schließt die Filiale auf — und findest die Backstube **verwüstet**.
-
-Der **Goldene Brezel-Schlüssel**, ein legendäres Familien-Erbstück aus dem
-19. Jahrhundert, das laut Überlieferung das Geheimrezept aller Ihle-Filialen
-enthält, ist **weg**. Hinter dem Tresen: ein grünlicher Schimmelklumpen und
-eine handgeschriebene Notiz.
-
-> *"Mir ghört Germering! — Die Schimmel-Gang"*
-
-Die Schimmel-Gang — eine Horde mutierter Pilzmonster, ausgebrochen aus dem
-feuchten Keller des alten leerstehenden Kaufhauses am Stadtplatz — hat sich
-über ganz Germering verteilt. Am Germeringer See. Im Kreuzlinger Forst.
-In der Cordobar-Ruine. Am Polariom. Und ihr Boss, **Schimmelmeister Modrý**,
-ein drei Meter großer Riesenpilz mit ausgeprägtem bayerischem Dialekt,
-hat sich im Keller des Kaufhauses verbarrikadiert.
-
-Nur du kannst ihn stoppen. Aber dazu brauchst du Kraft.
-Und Kraft kommt — natürlich — von **Ihle-Gebäck**.
-
-Sammle Münzen quer durch Germering, kauf dich bei den **4 echten Ihle-Filialen**
-mit Brezen, Berlinern und Bio-Bauernbrot mächtig ein, finde die **4 Dungeon-Kristalle**,
-und besiege den Boss.
-
-**Servus, Max. Und viel Erfolg.**
-
----
-
-## ⚔️ WAS DU JETZT IM SPIEL MACHEN KANNST
-
-### 🗺️ Open World — 16 echte Germeringer Stadtteile
-
-Eine handgemalte **200 × 120-Tile-Karte** (3200 × 1920 Pixel Spielwelt) mit allen
-echten Orten:
-
-- **Neugermering / Stadtmitte** mit Germarbrunnen
-- **Friedenstraße** — Ihle Hauptfiliale & Wohnviertel
-- **Bahnhof Germering (S8)** — mit echtem Münzregen-Event
-- **GEP — Germering Einkaufspassagen**
-- **Cewestraße** — Gewerbegebiet
-- **Germeringer See (Baggersee)** — schwimm dich reich
-- **Parsberg** — bewaldeter Hügel
-- **Kreuzlinger Forst** — dichter Wald, starke Gegner
-- **Polariom Eissporthalle** — rutschige Eisböden
-- **Stadthalle Germering** — Kultur-Hub
-- **Stadtmuseum ZEIT+RAUM** — römische Artefakte
-- **Freibad Germering**
-- **Cordobar-Ruine** — RIP, Sportfreunde-Stiller-Geburtsort
-- **WWK-Hochhaussiedlung** — Platformer-Sprünge
-- **Stadtpark** — Ruhezone, Heilstellen
-- **Alter Kaufhof** — Endboss-Dungeon (verriegelt!)
-
-### 🥨 4 echte Ihle-Filialen mit Café-Atmosphäre
-
-Alle vier an ihren echten Adressen mit eigenem **Logo-Schild über der Tür**
-und gemütlichem **Café-Sitzbereich davor** (Tische, Stühle, Sonnenschirme):
-
-| # | Adresse | Besonderheit |
-|---|---|---|
-| **1** | Friedenstr. 19a (Hauptfiliale) | Vollsortiment, Meister Ihle gibt Quests |
-| **2** | Münchner Str. 1 (im GEP) | Café-Atmosphäre |
-| **3** | Untere Bahnhofstr. 42 | **Frühaufsteher-Bonus: -20% vor 7 Uhr** |
-| **4** | Cewestraße 1 (Gewerbe) | Versteckte Menüs, billigste Preise, **legendäre MEGA-IHLE-BREZE** |
-
-**Öffnungszeiten greifen!** Nachts sind die Filialen zu — Schaufenster leuchten aber.
-
-### 🛒 8 echte Ihle-Produkte zum Kaufen
-
-| Produkt | Preis | Effekt |
-|---|---|---|
-| Ihle-Breze (Reichenhaller Bergsalz) | 8 M | +1 Herz |
-| Buttercroissant | 15 M | +1 Herz + Speedboost |
-| Berliner | 22 M | +2 Herzen |
-| Bio-Bauernbrot (Steinofen) | 35 M | +3 Herzen |
-| Lechfelder | 40 M | **Max-Herz +1 dauerhaft** |
-| Schwabenkorn | 55 M | Max-Herz +1 + Doppelmünzen 30s |
-| Bio-Kornwunder | 70 M | Voll heilen + Unverwundbarkeit |
-| **MEGA-IHLE-BREZE** ⭐ | 120 M | +5 Herzen + Fliegen + Doppelmünzen |
-
-Nach **10 Käufen** kriegst du den **Ihle-Genusspass** — dauerhaft **-15%**
-auf alles. Genauso wie im echten Leben.
-
-### 👥 5 Germering-Originale als NPCs
-
-- **Meister Ihle** — gibt Quests, erzählt die Hintergrundgeschichte
-- **Stadtführer Klaus** — wandert beim ersten Mal den **Roten Faden** entlang und erklärt dir Germering live
-- **Gerhard, S8-Fahrer** — Tipps zum Bahnsteig-Münzregen
-- **Oma Liesl** — verkauft *illegal* günstige Kuchen (Vorsicht, Magengrummeln!)
-- **Franz** — Sportfreunde-Stiller-Fan in der Cordobar-Ruine, schaltet Easter-Egg-Soundtrack frei
-
-Jeder NPC mit eigenem **animiertem Portrait im Dialogfenster**.
-
-### 💎 5-stufige Hauptquest
-
-1. **Sprich mit Klaus** am Germarbrunnen — der erklärt dir Germering
-2. **Hol das römische Artefakt** aus dem Stadtmuseum ZEIT+RAUM (+1 Angriff dauerhaft)
-3. **Sammle die 4 Dungeon-Kristalle** in Polariom, Forst, Cordobar und Parsberg
-4. **Bezwinge Schimmelmeister Modrý** im alten Kaufhof
-5. Germering ist gerettet 🥨
-
-Quest-Hinweise blenden sich automatisch ein nach jedem Fortschritt.
-
-### 🍄 5 Gegnertypen mit echter KI
-
-- **Schimmel-Pilz** — patrouilliert, jagt aus 80px Sicht
-- **Hefen-Blob** — hüpft alle 1.5s aggressiv auf dich zu
-- **Rost-Ratte** — schnell, dreht bei zu großer Nähe ab (Hit-and-Run)
-- **Takt-Pilz** — bewegt sich **nur im 0.5s-Beat** (= 120 BPM = Cordobar-Vibe)
-- **Eis-Schimmel** — droppt rutschige Eisflecken im Polariom
-
-Plus **Schimmelmeister Modrý** — der Boss mit **3 Phasen**:
-- Phase 1 (300→180 HP): Sporen-Projektile mit parabolischer Trajektorie
-- Phase 2 (180→80 HP): **3 Klone** spawnen — nur der echte verliert HP
-- Phase 3 (80→0 HP): Rasend, hinterlässt **Schimmel-Slow-Spuren** auf dem Boden
-
-### 💰 4 Münzsorten
-
-- **Kupfermünze** (1 M) — überall auf Gehwegen, respawnen alle 45s
-- **Silbermünze** (5 M) — fallen von Gegnern, oder beim **S-Bahn-Münzregen** am Bahnsteig (alle 75s)
-- **Goldmünze** (20 M) — versteckt am See, Parsberg-Gipfel, **+60 M wenn du den See einmal umschwimmst!**
-- **Brezel-Münze** (50 M) — Bonus für jeden gefundenen Dungeon-Kristall
-
-**Coin-Magnet**: Münzen in 32px Umkreis fliegen automatisch zu dir.
-
-### ✨ Powerup-System
-
-- **Speedboost** — 1.8× Geschwindigkeit, orange Spur
-- **Unverwundbarkeit** — kein Schaden, golden blinkend
-- **Fliegen** — durch Wände, animierte Flügel
-- **Doppelmünzen** — alle Münzwerte ×2, goldener Glow
-- **Brezel-Schild** — absorbiert 1 Treffer
-
-### 🌅 Tag/Nacht-Zyklus
-
-1 Spieltag = **8 Minuten Echtzeit**. Tageszeiten:
-- **Morgen** (5–8 Uhr) — warmer Orange-Tint, Frühaufsteher-Bonus an Filiale 3
-- **Tag** (8–18 Uhr) — alle Filialen geöffnet
-- **Abend** (18–22 Uhr) — bläulicher Tint, ruhiger
-- **Nacht** (22–5 Uhr) — dunkles Overlay, Filialen geschlossen, nur Schaufenster leuchten
-
-### 🏛️ 5 interaktive Landmarks (Taste E)
-
-- **Germarbrunnen** — +1 Münze/Sek für 30 Sek
-- **Jakobusbrunnen** an der St. Jakobskirche — volles Herz-Auffüllen
-- **Mariensäule** — 20 Sek Unverwundbarkeit
-- **Römischer Ziegelbrennofen** — Geheimgang öffnet sich (+50 Münzen)
-- **Cordobar-Ruine** — Easter-Egg-Chiptune freischalten (Sportfreunde-Stiller-Vibes)
-
-### 🚂 Animierte S-Bahn
-
-Alle 75 Sekunden fährt eine **echte rot-weiße S8** durch den Bahnhof Germering.
-Während sie hält: **10 Silbermünzen** regnen auf den Bahnsteig. *Pass auf!*
-
-### 🏃 Sonderbewegung in der WWK-Hochhaussiedlung
-
-In der WWK-Area wird **Leertaste = Sprung** (statt Attack). Du kannst kurz
-durch Gebäudewände dashen — perfekt für Balkon-zu-Balkon-Hopping.
-
-### 🛡️ Volle Game-Feel-Polish
-
-- **Slash-Animation** beim Angriff: 3 expandierende Lichtbögen + Inner-Flash + Speed-Lines + Forward-Lunge
-- **Knockback** auf getroffene Gegner
-- **Screen-Shake** bei Treffern und Schaden (stärker beim Boss)
-- **Floating Damage Numbers** (rotes "-3") und **Coin-Pickup-Numbers** (gelbes "+5")
-- **Idle-Bobbing** für alle NPCs in der Welt
-- **Animierte NPC-Portraits** im Dialog (extra zappelig beim Sprechen)
-- **Slash-SFX** + Knockback-Effekt — jeder Treffer fühlt sich an
-
-### 💾 Save-System
-
-- **F5** speichert manuell
-- **Auto-Save** nach jedem Kauf und nach Boss-Sieg
-- **Respawn an letzter besuchter Filiale** bei Tod
-- **Spielstand laden** im Hauptmenü
-
-### 🎵 Prozedurale Audio
-
-Alle Sounds und Musik komplett in Rust generiert — kein externes Asset:
-- Münzen-Arpeggio (C4→E4→G4)
-- Schadens-Pitch-Drop
-- Kauf-Jingle (C5→E5→G5)
-- Tag/Nacht/Boss/Cordobar-Chiptune-Loops (120 BPM tags, 80 BPM nachts)
-
----
-
-## 🎮 STEUERUNG
+## Steuerung
 
 | Taste | Aktion |
 |---|---|
-| **W A S D** / Pfeiltasten | Bewegen |
-| **Leertaste** | Angriff *(Sprung in WWK)* |
-| **E** | Interagieren / Filiale betreten / Dialog weiterklicken |
-| **TAB** | Minimap mit Roter-Faden-Overlay |
-| **P** | Pause |
-| **F5** | Speichern |
-| **ESC** | Hauptmenü / Beenden |
+| W / A / S / D oder Pfeiltasten | Sprinter fahren (mit Trägheit) |
+| **LEERTASTE** (im Spiel) | **Nitro-Schub zünden** (wenn die Leiste voll ist) |
+| E | Interagieren (Paket abholen, abliefern, Shop öffnen, Pizza/Kaffee kaufen) |
+| 1 / 2 (im Shop) | Pizza / Kaffee kaufen |
+| ESC | Pause (im Spiel) bzw. Shop verlassen |
+| LEERTASTE / ENTER | Spiel starten bzw. nach Game Over neu starten |
+| Q | Spiel beenden |
+| R (im Game-Over) | Sofort neu starten |
 
----
+## Nitro
 
-## 🛠️ STARTEN
+Unten links siehst du die **Nitro-Leiste**. Sie lädt sich, während du fährst —
+auf der Straße schneller als querfeldein —, und jede saubere Lieferung gibt
+einen kräftigen Schub dazu. Ist sie voll (`NITRO BEREIT`), zündest du mit
+`LEERTASTE` einen 3-Sekunden-Schub (+60 % Tempo), perfekt um eine knappe
+Lieferung doch noch rechtzeitig zu schaffen. Der Sprinter blinkt und zieht
+eine Abgasfahne, solange ein Boost aktiv ist.
+
+## Spielablauf
+
+1. Im Hauptmenü mit `LEERTASTE` ins Spiel starten.
+2. Ein **blauer Pickup-Marker** erscheint über einer der vier Ihle-Filialen
+   (Bahnhof, Zentrum, Nord, Süd). Fahre dort hin und drücke `E`, um das
+   Paket zu laden.
+3. Ein **rotes blinkendes X** erscheint an der Kundenadresse. Fahre dort
+   hin und drücke `E`, um zu liefern.
+4. Score- und Münz-Belohnungen werden gutgeschrieben, der nächste Auftrag
+   startet sofort.
+5. Wenn der Timer abläuft, verlierst du ein Leben. Nach drei verlorenen
+   Leben ist Feierabend.
+
+## Schwierigkeitsskalierung
+
+| Lieferungen | Zeitlimit | Stimmung |
+|---|---|---|
+| 1–5 | 60 Sek | Kunden entspannt |
+| 6–10 | 50 Sek | Kunden leicht ungeduldig |
+| 11–20 | 40 Sek | Kunden nervig |
+| 21–35 | 30 Sek | Kunden aggressiv |
+| 36+ | 22 Sek | Kunden extrem |
+
+Ab Lieferung 20 liegen Ziel-Adressen deutlich weiter vom Abholpunkt entfernt.
+
+## Punkte-System
+
+- **Basis:** 100 Punkte pro Lieferung
+- **Zeitbonus:** verbleibende Sekunden × 5 Punkte
+- **Perfekt-Bonus:** noch >60 % der Zeit übrig → +50 Punkte
+- **Boost aktiv bei Lieferung:** +20 Bonus-Punkte
+- **Streak-Multiplikator** (Lieferungen am Stück ohne Leben-Verlust):
+  - 3–4 → ×1.5
+  - 5–7 → ×2.0
+  - 8+ → ×2.5
+- **Münzen:** ~2–10 pro Lieferung (Zeitbonus + Streak-Bonus)
+
+Ein verpasster Kunde setzt die Streak zurück — Tempo lohnt sich also doppelt.
+
+## Jannicks Kölner Eck
+
+In der Hauptstraße steht Jannicks Pizzeria (rot/weiße Markise + Kölner Dom).
+Wenn du mit dem Sprinter nahe vorbeikommst, blendet das Spiel einen Hinweis ein.
+Mit `E` öffnest du Jannicks Shop. Pause, Kölsch-Sprüche und das Menü:
+
+| Item | Preis | Effekt |
+|---|---|---|
+| Margherita Pizza | 5 Münzen | +30 Sek Speed-Boost (+40 % Bewegung) |
+| Geiler Kaffee | 3 Münzen | +20 Sek Speed-Boost (+25 % Bewegung) |
+
+`1` kauft Pizza, `2` kauft Kaffee, `ESC` verlässt den Shop.
+
+## Highscore
+
+Die Top 5 Highscores werden in `highscore.json` im Projektordner gespeichert
+(`{ "entries": [...] }`). Beim ersten Spielstart wird die Datei automatisch
+angelegt. Schlägst du den bisherigen Spitzenreiter, blinkt `NEUER REKORD!`
+im Game-Over-Screen golden.
+
+## Sound & Optik
+
+Es werden **keine externen Dateien** benötigt — alle Sprites *und* der
+komplette Sound werden zur Laufzeit prozedural erzeugt:
+
+- **Motorgeräusch**, dessen Tonhöhe und Lautstärke mit dem Tempo mitgehen
+- **Liefer-Jingle**, Münz-Klimpern, Crash-Rumms, Nitro-Whoosh und ein
+  unfreundlicher Buzzer, wenn ein Kunde aufgibt
+- **Game Feel:** Screen-Shake bei Crashes und Lieferungen, Münz- und
+  Funken-Partikel, Abgaswolken bei Nitro und eine leicht vorausschauende Kamera
+- Der Sprinter nutzt **echte Richtungs-Sprites** (kein verzerrtes Rotieren)
+  mit animierten Rädern und weichem Schatten
+
+## Bauen und Starten
 
 ```bash
-cd ihle-game
 cargo run --release
 ```
 
-**Voraussetzung:** Rust (edition 2021). Sonst keine Abhängigkeiten —
-einzige Crate: `macroquad = "0.4"`.
+Beim ersten Build kann es einige Minuten dauern, weil Bevy kompiliert wird.
 
-Läuft auf Linux, macOS, Windows. **Fullscreen 1920×1080**, intern auf
-480×270 virtuelle Canvas gerendert und mit Letterbox-Skalierung auf
-beliebige Auflösungen hochgezogen. UI-Text wird in nativer Auflösung
-gerastert — Pixel-Art bleibt scharf, Schrift bleibt lesbar.
+## Stadt
 
-**60 FPS Cap** eingebaut, GPU/CPU-schonend.
+Die 128×128-Pixelart-Karte ist an Germering orientiert und enthält:
 
----
+- **Rathaus Germering** (Kirchenplatz)
+- **Bahnhof Germering** mit S-Bahn-Gleisen (S8)
+- **Aldi Süd** in der Unteren Bahnhofstraße
+- **Rewe** im Zentrum
+- **Vier Ihle-Filialen** (Bahnhof, Zentrum, Nord, Süd)
+- **Jannicks Kölner Eck** an der Hauptstraße
+- **Hauptstraße / Untere Bahnhofstraße / Eichenauer Straße** als Hauptachsen
+- **Stadtpark Nord** und Grünflächen
+- Wohnblöcke mit gemischten Einfamilien-/Mehrfamilienhäusern
 
-## 🏗️ TECH
-
-- **Sprache:** Rust 2021, 100%
-- **Engine:** [macroquad](https://github.com/not-fl3/macroquad) 0.4
-- **Sprites:** alle als `const`-Pixel-Arrays direkt im Code
-- **Save:** simples key=value-Textformat (kein Bincode, kein serde)
-- **Architektur:** 13 Module — main, world, player, entities, boss, shop, sprites, audio, ui, collision, npc, save, consts
-- **Render:** Two-Pass — World auf 480×270-Render-Target (Nearest-Filter), UI direkt im Screen-Space
-
----
-
-## 🌍 ECHTE GERMERINGER ORTE IM SPIEL
-
-- **Landbäckerei Ihle** — Friedenstr. 19a, Münchner Str. 1, Untere Bahnhofstr. 42, Cewestraße 1
-- **Stadthalle Germering** — Bahnhofplatz
-- **Stadtmuseum ZEIT+RAUM** — Domonter Str.
-- **Polariom** — Eishalle
-- **St. Jakobskirche** — mit Jakobusbrunnen
-- **Germarbrunnen** — Neugermering
-- **Bahnhof Germering** — S8 nach München
-- **Germeringer See (Baggersee)**
-- **Parsberg, Kreuzlinger Forst, Stadtpark**
-- **Cordobar** (Ruine) — *Hier haben die Sportfreunde Stiller angefangen. RIP.*
-
-> *Germering — sechstgrößte Stadt Oberbayerns. Seit 859 n. Chr. als
-> "Kermaringon" bekannt. Und jetzt auch als episches Pixel-RPG.*
-
----
-
-## 📜 CREDITS
-
-- **Konzept & Code:** Servus aus Germering
-- **Gewidmet:** Max Huber, Bäckerlehrling — und allen Ihle-Mitarbeiter:innen,
-  die jeden Morgen um 5:47 Uhr aufsperren.
-
-**Servus & Pfiati!** 🥨
+Viel Spaß beim Liefern!

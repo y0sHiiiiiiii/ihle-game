@@ -1,17 +1,23 @@
 [package]
-name = "germering-quest"
+name = "germering_delivery"
 version = "0.1.0"
 edition = "2021"
-authors = ["Max Huber, Bäckerlehrling"]
-description = "Germering Quest: Die Schimmel-Invasion — 2D Pixel-Art Open-World RPG"
+authors = ["Germering Delivery"]
+description = "Ihle-Sprinter Lieferfahrer Highscore Game"
 
 [dependencies]
-macroquad = { version = "0.4", features = ["audio"]}
-
-[profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
+bevy = "0.14"
+rand = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 [profile.dev]
 opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
