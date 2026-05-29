@@ -2,6 +2,7 @@
 
 use bevy::prelude::*;
 
+use crate::game::assets::{ts_body, ts_display, UiFonts};
 use crate::game::delivery::DeliveryStats;
 use crate::game::gamestate::GameState;
 use crate::game::player::Player;
@@ -66,6 +67,7 @@ fn spawn_shop_ui(
     mut commands: Commands,
     state: Res<ShopUiState>,
     stats: Res<DeliveryStats>,
+    fonts: Res<UiFonts>,
 ) {
     commands
         .spawn((
@@ -99,22 +101,14 @@ fn spawn_shop_ui(
                 })
                 .with_children(|p| {
                     p.spawn(TextBundle::from_section(
-                        "JANNICKS KOELNER ECK",
-                        TextStyle {
-                            font_size: 32.0,
-                            color: Color::srgb(0.95, 0.85, 0.2),
-                            ..default()
-                        },
+                        "JANNICKS KÖLNER ECK",
+                        ts_display(&fonts, 22.0, Color::srgb(0.95, 0.85, 0.2)),
                     ));
 
                     p.spawn(
                         TextBundle::from_section(
                             state.dialog.clone(),
-                            TextStyle {
-                                font_size: 18.0,
-                                color: Color::srgb(0.95, 0.95, 0.95),
-                                ..default()
-                            },
+                            ts_body(&fonts, 18.0, Color::srgb(0.95, 0.95, 0.95)),
                         )
                         .with_style(Style {
                             margin: UiRect::vertical(Val::Px(12.0)),
@@ -124,24 +118,16 @@ fn spawn_shop_ui(
 
                     p.spawn((
                         TextBundle::from_section(
-                            format!("Muenzen: {}", stats.coins),
-                            TextStyle {
-                                font_size: 22.0,
-                                color: Color::srgb(1.0, 0.85, 0.25),
-                                ..default()
-                            },
+                            format!("Münzen: {}", stats.coins),
+                            ts_body(&fonts, 22.0, Color::srgb(1.0, 0.85, 0.25)),
                         ),
                         ShopCoinsText,
                     ));
 
                     p.spawn(
                         TextBundle::from_section(
-                            "[1]  Margherita Pizza        5 Muenzen   +30s Speed-Boost (+40%)",
-                            TextStyle {
-                                font_size: 20.0,
-                                color: Color::srgb(0.85, 0.95, 0.85),
-                                ..default()
-                            },
+                            "[1]  Margherita Pizza        5 Münzen   +30s Speed-Boost (+40%)",
+                            ts_body(&fonts, 18.0, Color::srgb(0.85, 0.95, 0.85)),
                         )
                         .with_style(Style {
                             margin: UiRect::top(Val::Px(16.0)),
@@ -151,12 +137,8 @@ fn spawn_shop_ui(
 
                     p.spawn(
                         TextBundle::from_section(
-                            "[2]  'Geiler Kaffee'         3 Muenzen   +20s Speed-Boost (+25%)",
-                            TextStyle {
-                                font_size: 20.0,
-                                color: Color::srgb(0.85, 0.95, 0.85),
-                                ..default()
-                            },
+                            "[2]  'Geiler Kaffee'         3 Münzen   +20s Speed-Boost (+25%)",
+                            ts_body(&fonts, 18.0, Color::srgb(0.85, 0.95, 0.85)),
                         )
                         .with_style(Style {
                             margin: UiRect::top(Val::Px(6.0)),
@@ -167,11 +149,7 @@ fn spawn_shop_ui(
                     p.spawn((
                         TextBundle::from_section(
                             "",
-                            TextStyle {
-                                font_size: 18.0,
-                                color: Color::srgb(0.95, 0.7, 0.3),
-                                ..default()
-                            },
+                            ts_body(&fonts, 18.0, Color::srgb(0.95, 0.7, 0.3)),
                         )
                         .with_style(Style {
                             margin: UiRect::top(Val::Px(12.0)),
@@ -184,11 +162,7 @@ fn spawn_shop_ui(
                     p.spawn(
                         TextBundle::from_section(
                             "[ESC] verlassen",
-                            TextStyle {
-                                font_size: 16.0,
-                                color: Color::srgb(0.7, 0.7, 0.75),
-                                ..default()
-                            },
+                            ts_body(&fonts, 16.0, Color::srgb(0.7, 0.7, 0.75)),
                         )
                         .with_style(Style {
                             margin: UiRect::top(Val::Px(18.0)),
@@ -241,9 +215,9 @@ fn shop_input(
                 player.speed_boost_timer = 30.0;
                 player.speed_boost_factor = 0.40;
             }
-            feedback("Lecker Pizza! Schub fuer 30 Sekunden!");
+            feedback("Lecker Pizza! Schub für 30 Sekunden!");
         } else {
-            feedback("Du hast nit genug Muenzen, kumm spaeter!");
+            feedback("Du hast nit genug Münzen, kumm später!");
         }
     } else if buy2 {
         if stats.coins >= 3 {
@@ -254,7 +228,7 @@ fn shop_input(
             }
             feedback("Geiler Kaffee! 20 Sekunden Power!");
         } else {
-            feedback("3 Muenzen brauchste! Schaff doch erstmal nen Auftrag!");
+            feedback("3 Münzen brauchste! Schaff doch erstmal nen Auftrag!");
         }
     }
 }
@@ -277,6 +251,6 @@ fn update_feedback(
 
 fn update_coins_text(stats: Res<DeliveryStats>, mut q: Query<&mut Text, With<ShopCoinsText>>) {
     if let Ok(mut text) = q.get_single_mut() {
-        text.sections[0].value = format!("Muenzen: {}", stats.coins);
+        text.sections[0].value = format!("Münzen: {}", stats.coins);
     }
 }

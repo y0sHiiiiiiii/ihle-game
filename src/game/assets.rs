@@ -8,8 +8,65 @@ pub struct AssetsPlugin;
 
 impl Plugin for AssetsPlugin {
     fn build(&self, app: &mut App) {
+        // `UiFonts` is built via `FromWorld` so it exists *before* any spawn
+        // system (incl. the initial `OnEnter(MainMenu)`) runs — `Assets<Font>`
+        // is already present because DefaultPlugins is added before GamePlugin.
         app.init_resource::<GameAssets>()
+            .init_resource::<UiFonts>()
             .add_systems(PreStartup, generate_all_sprites);
+    }
+}
+
+/// Embedded pixel fonts (compiled into the binary — no loose runtime files).
+/// `display` = chunky arcade headers, `body` = readable HUD/menu text.
+#[derive(Resource)]
+pub struct UiFonts {
+    pub display: Handle<Font>,
+    pub body: Handle<Font>,
+}
+
+impl FromWorld for UiFonts {
+    fn from_world(world: &mut World) -> Self {
+        let mut fonts = world.resource_mut::<Assets<Font>>();
+        let display = fonts.add(
+            Font::try_from_bytes(
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/assets/fonts/PressStart2P-Regular.ttf"
+                ))
+                .to_vec(),
+            )
+            .expect("PressStart2P font failed to parse"),
+        );
+        let body = fonts.add(
+            Font::try_from_bytes(
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/assets/fonts/Silkscreen-Regular.ttf"
+                ))
+                .to_vec(),
+            )
+            .expect("Silkscreen font failed to parse"),
+        );
+        UiFonts { display, body }
+    }
+}
+
+/// `TextStyle` in the readable body pixel font.
+pub fn ts_body(f: &UiFonts, size: f32, color: Color) -> TextStyle {
+    TextStyle {
+        font: f.body.clone(),
+        font_size: size,
+        color,
+    }
+}
+
+/// `TextStyle` in the chunky display pixel font (titles, big banners).
+pub fn ts_display(f: &UiFonts, size: f32, color: Color) -> TextStyle {
+    TextStyle {
+        font: f.display.clone(),
+        font_size: size,
+        color,
     }
 }
 

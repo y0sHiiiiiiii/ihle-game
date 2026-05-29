@@ -183,7 +183,7 @@ fn tick_delivery_timer(
     late.timer = 2.0;
     late.address = active.dropoff.name.clone();
     feedback.timer = 2.0;
-    feedback.text = "ZU SPAET! Kunde wartet nicht mehr!".to_string();
+    feedback.text = "ZU SPÄT! Kunde wartet nicht mehr!".to_string();
     feedback.color = Color::srgb(1.0, 0.25, 0.25);
 
     if let Ok(mut p) = player_q.get_single_mut() {
@@ -308,7 +308,7 @@ fn handle_interaction(
                 }
                 feedback.timer = 1.5;
                 feedback.text =
-                    format!("Paket geladen — Ziel: {}", active.dropoff.name.clone());
+                    format!("Paket geladen - Ziel: {}", active.dropoff.name.clone());
                 feedback.color = Color::srgb(0.45, 0.95, 0.45);
                 pickup_ev.send(PackagePickedUpEvent { pos: target });
             }
@@ -350,7 +350,7 @@ fn handle_interaction(
                     String::new()
                 };
                 feedback.text = format!(
-                    "Geliefert!  +{} Punkte  (+{} Muenzen){}",
+                    "Geliefert!  +{} Punkte  (+{} Münzen){}",
                     points, coins_earned, streak_tag
                 );
                 feedback.color = Color::srgb(0.95, 0.85, 0.25);

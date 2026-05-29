@@ -4,9 +4,10 @@ use bevy::prelude::*;
 use bevy::render::render_asset::RenderAssetUsages;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
-use crate::game::assets::{set_px, GameAssets};
+use crate::game::assets::{set_px, ts_body, GameAssets, UiFonts};
 use crate::game::delivery::{
     ActiveDelivery, DeliveryFeedback, DeliveryPhase, DeliveryStats, LateNotification,
+    INTERACT_RADIUS,
 };
 use crate::game::gamestate::GameState;
 use crate::game::map::{GameMap, MAP_HEIGHT, MAP_WIDTH};
@@ -63,6 +64,9 @@ pub struct NitroBarFill;
 #[derive(Component)]
 pub struct NitroLabel;
 
+#[derive(Component)]
+pub struct InteractHint;
+
 #[derive(Resource)]
 pub struct MinimapImage {
     #[allow(dead_code)]
@@ -86,6 +90,7 @@ impl Plugin for HudPlugin {
                     update_late_banner,
                     update_minimap_dots,
                     update_nitro_bar,
+                    update_interact_hint,
                 )
                     .run_if(in_state(GameState::Playing)),
             )
@@ -99,6 +104,7 @@ impl Plugin for HudPlugin {
 fn setup_hud(
     mut commands: Commands,
     assets: Res<GameAssets>,
+    fonts: Res<UiFonts>,
     map: Res<GameMap>,
     mut images: ResMut<Assets<Image>>,
     existing: Query<Entity, With<HudRoot>>,
@@ -173,22 +179,14 @@ fn setup_hud(
                 row.spawn((
                     TextBundle::from_section(
                         "ZEIT 60",
-                        TextStyle {
-                            font_size: 30.0,
-                            color: Color::srgb(0.95, 0.95, 0.95),
-                            ..default()
-                        },
+                        ts_body(&fonts, 28.0, Color::srgb(0.95, 0.95, 0.95)),
                     ),
                     TimerText,
                 ));
                 row.spawn((
                     TextBundle::from_section(
                         "Score: 0",
-                        TextStyle {
-                            font_size: 26.0,
-                            color: Color::srgb(0.95, 0.95, 0.95),
-                            ..default()
-                        },
+                        ts_body(&fonts, 24.0, Color::srgb(0.95, 0.95, 0.95)),
                     ),
                     ScoreText,
                 ));
@@ -213,12 +211,8 @@ fn setup_hud(
                     });
                     coins_box.spawn((
                         TextBundle::from_section(
-                            "8 Muenzen",
-                            TextStyle {
-                                font_size: 24.0,
-                                color: Color::srgb(1.0, 0.85, 0.25),
-                                ..default()
-                            },
+                            "8 Münzen",
+                            ts_body(&fonts, 22.0, Color::srgb(1.0, 0.85, 0.25)),
                         ),
                         CoinsText,
                     ));
@@ -241,11 +235,7 @@ fn setup_hud(
             top.spawn((
                 TextBundle::from_section(
                     "Auftrag: -",
-                    TextStyle {
-                        font_size: 18.0,
-                        color: Color::srgb(0.85, 0.95, 1.0),
-                        ..default()
-                    },
+                    ts_body(&fonts, 17.0, Color::srgb(0.85, 0.95, 1.0)),
                 )
                 .with_style(Style {
                     margin: UiRect::top(Val::Px(4.0)),
@@ -278,11 +268,7 @@ fn setup_hud(
     .with_children(|p| {
         p.spawn(TextBundle::from_section(
             "",
-            TextStyle {
-                font_size: 22.0,
-                color: Color::srgb(1.0, 1.0, 1.0),
-                ..default()
-            },
+            ts_body(&fonts, 22.0, Color::srgb(1.0, 1.0, 1.0)),
         ));
     });
 
@@ -311,12 +297,8 @@ fn setup_hud(
         ))
         .with_children(|p| {
             p.spawn(TextBundle::from_section(
-                "ZU SPAET! Kunde wartet nicht mehr!",
-                TextStyle {
-                    font_size: 30.0,
-                    color: Color::srgb(1.0, 0.95, 0.95),
-                    ..default()
-                },
+                "ZU SPÄT! Kunde wartet nicht mehr!",
+                ts_body(&fonts, 28.0, Color::srgb(1.0, 0.95, 0.95)),
             ));
         });
 
@@ -344,12 +326,8 @@ fn setup_hud(
         ))
         .with_children(|p| {
             p.spawn(TextBundle::from_section(
-                "NAVI — GERMERING",
-                TextStyle {
-                    font_size: 15.0,
-                    color: Color::srgb(0.85, 0.78, 0.25),
-                    ..default()
-                },
+                "NAVI - GERMERING",
+                ts_body(&fonts, 15.0, Color::srgb(0.85, 0.78, 0.25)),
             ));
             p.spawn(NodeBundle {
                 style: Style {
@@ -420,11 +398,7 @@ fn setup_hud(
             p.spawn((
                 TextBundle::from_section(
                     "-> GERADEAUS",
-                    TextStyle {
-                        font_size: 18.0,
-                        color: Color::srgb(0.4, 0.95, 0.4),
-                        ..default()
-                    },
+                    ts_body(&fonts, 18.0, Color::srgb(0.4, 0.95, 0.4)),
                 )
                 .with_style(Style {
                     margin: UiRect::top(Val::Px(6.0)),
@@ -436,11 +410,7 @@ fn setup_hud(
             p.spawn((
                 TextBundle::from_section(
                     "0m",
-                    TextStyle {
-                        font_size: 15.0,
-                        color: Color::srgb(0.95, 0.95, 0.95),
-                        ..default()
-                    },
+                    ts_body(&fonts, 15.0, Color::srgb(0.95, 0.95, 0.95)),
                 ),
                 NaviDistanceText,
             ));
@@ -448,11 +418,7 @@ fn setup_hud(
             p.spawn((
                 TextBundle::from_section(
                     "BOOST AKTIV",
-                    TextStyle {
-                        font_size: 15.0,
-                        color: Color::srgb(1.0, 0.85, 0.2),
-                        ..default()
-                    },
+                    ts_body(&fonts, 15.0, Color::srgb(1.0, 0.85, 0.2)),
                 )
                 .with_style(Style {
                     display: Display::None,
@@ -487,11 +453,7 @@ fn setup_hud(
             p.spawn((
                 TextBundle::from_section(
                     "NITRO",
-                    TextStyle {
-                        font_size: 15.0,
-                        color: Color::srgb(0.85, 0.78, 0.25),
-                        ..default()
-                    },
+                    ts_body(&fonts, 15.0, Color::srgb(0.85, 0.78, 0.25)),
                 ),
                 NitroLabel,
             ));
@@ -522,6 +484,37 @@ fn setup_hud(
                     NitroBarFill,
                 ));
             });
+        });
+
+    // Interaction prompt at pickup / dropoff (mirrors Jannick's hint).
+    commands
+        .spawn((
+            NodeBundle {
+                style: Style {
+                    position_type: PositionType::Absolute,
+                    bottom: Val::Px(158.0),
+                    left: Val::Percent(50.0),
+                    margin: UiRect::left(Val::Px(-150.0)),
+                    width: Val::Px(300.0),
+                    padding: UiRect::all(Val::Px(10.0)),
+                    display: Display::None,
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border: UiRect::all(Val::Px(2.0)),
+                    ..default()
+                },
+                background_color: Color::srgba(0.05, 0.06, 0.1, 0.92).into(),
+                border_color: Color::srgb(0.4, 0.9, 0.5).into(),
+                ..default()
+            },
+            HudRoot,
+            InteractHint,
+        ))
+        .with_children(|p| {
+            p.spawn(TextBundle::from_section(
+                "[E] Paket abholen",
+                ts_body(&fonts, 20.0, Color::srgb(0.5, 1.0, 0.6)),
+            ));
         });
 }
 
@@ -562,9 +555,9 @@ fn update_nitro_bar(
         let (msg, color) = if active {
             ("NITRO!  ", Color::srgb(1.0, 0.7, 0.25))
         } else if ready {
-            ("NITRO BEREIT — [LEERTASTE]", Color::srgb(0.5, 1.0, 0.6))
+            ("NITRO BEREIT - [LEERTASTE]", Color::srgb(0.5, 1.0, 0.6))
         } else {
-            ("NITRO laedt...", Color::srgb(0.85, 0.78, 0.25))
+            ("NITRO lädt...", Color::srgb(0.85, 0.78, 0.25))
         };
         text.sections[0].value = msg.to_string();
         text.sections[0].style.color = color;
@@ -606,7 +599,7 @@ fn update_score_coins(
         text.sections[0].value = format!("Score: {}", stats.score);
     }
     if let Ok(mut text) = coins_q.get_single_mut() {
-        text.sections[0].value = format!("{} Muenzen", stats.coins);
+        text.sections[0].value = format!("{} Münzen", stats.coins);
     }
 }
 
@@ -706,6 +699,44 @@ fn update_late_banner(
     style.display = Display::Flex;
     let blink = ((time.elapsed_seconds() * 8.0).sin() * 0.5 + 0.5) * 0.5 + 0.5;
     *bg = Color::srgba(0.55 + blink * 0.3, 0.05, 0.05, 0.92).into();
+}
+
+/// Shows a clear `[E]` call-to-action when the van is in range of the current
+/// pickup or dropoff — the same affordance Jannick's shop already has.
+fn update_interact_hint(
+    active: Option<Res<ActiveDelivery>>,
+    player_q: Query<&Transform, With<Player>>,
+    mut hint_q: Query<(&mut Style, &Children), With<InteractHint>>,
+    mut text_q: Query<&mut Text>,
+) {
+    let Ok((mut style, children)) = hint_q.get_single_mut() else {
+        return;
+    };
+    let (Some(active), Ok(player_tr)) = (active, player_q.get_single()) else {
+        style.display = Display::None;
+        return;
+    };
+    let pos = player_tr.translation.truncate();
+    let (target, msg) = match active.phase {
+        DeliveryPhase::GoToPickup => (
+            GameMap::tile_to_world(active.pickup.interact_tile),
+            "[E] Paket abholen",
+        ),
+        DeliveryPhase::GoToDropoff => (
+            GameMap::tile_to_world(active.dropoff.tile),
+            "[E] Hier abliefern",
+        ),
+    };
+    if pos.distance(target) <= INTERACT_RADIUS {
+        style.display = Display::Flex;
+        for child in children.iter() {
+            if let Ok(mut text) = text_q.get_mut(*child) {
+                text.sections[0].value = msg.to_string();
+            }
+        }
+    } else {
+        style.display = Display::None;
+    }
 }
 
 fn update_minimap_dots(

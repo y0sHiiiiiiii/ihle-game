@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
+use crate::game::assets::{ts_body, ts_display, UiFonts};
 use crate::game::delivery::DeliveryStats;
 use crate::game::gamestate::GameState;
 
@@ -117,6 +118,7 @@ impl Plugin for HighscorePlugin {
 fn enter_game_over(
     mut commands: Commands,
     stats: Res<DeliveryStats>,
+    fonts: Res<UiFonts>,
     mut highscores: ResMut<Highscores>,
     mut record: ResMut<NewRecordFlag>,
     existing: Query<Entity, With<GameOverRoot>>,
@@ -164,11 +166,7 @@ fn enter_game_over(
                 t.spawn(
                     TextBundle::from_section(
                         "FEIERABEND!",
-                        TextStyle {
-                            font_size: 96.0,
-                            color: Color::srgb(0.0, 0.0, 0.0),
-                            ..default()
-                        },
+                        ts_display(&fonts, 60.0, Color::srgb(0.0, 0.0, 0.0)),
                     )
                     .with_style(Style {
                         position_type: PositionType::Absolute,
@@ -179,11 +177,7 @@ fn enter_game_over(
                 );
                 t.spawn(TextBundle::from_section(
                     "FEIERABEND!",
-                    TextStyle {
-                        font_size: 96.0,
-                        color: Color::srgb(0.98, 0.82, 0.15),
-                        ..default()
-                    },
+                    ts_display(&fonts, 60.0, Color::srgb(0.98, 0.82, 0.15)),
                 ));
             });
 
@@ -191,11 +185,7 @@ fn enter_game_over(
                 p.spawn((
                     TextBundle::from_section(
                         "NEUER REKORD!",
-                        TextStyle {
-                            font_size: 40.0,
-                            color: Color::srgb(1.0, 0.9, 0.3),
-                            ..default()
-                        },
+                        ts_display(&fonts, 26.0, Color::srgb(1.0, 0.9, 0.3)),
                     )
                     .with_style(Style {
                         margin: UiRect::top(Val::Px(12.0)),
@@ -208,11 +198,7 @@ fn enter_game_over(
             p.spawn(
                 TextBundle::from_section(
                     format!("Lieferungen: {}", stats.delivery_count),
-                    TextStyle {
-                        font_size: 28.0,
-                        color: Color::srgb(0.95, 0.95, 0.95),
-                        ..default()
-                    },
+                    ts_body(&fonts, 26.0, Color::srgb(0.95, 0.95, 0.95)),
                 )
                 .with_style(Style {
                     margin: UiRect::top(Val::Px(24.0)),
@@ -222,11 +208,7 @@ fn enter_game_over(
             p.spawn(
                 TextBundle::from_section(
                     format!("Score: {}", stats.score),
-                    TextStyle {
-                        font_size: 28.0,
-                        color: Color::srgb(0.95, 0.95, 0.95),
-                        ..default()
-                    },
+                    ts_body(&fonts, 26.0, Color::srgb(0.95, 0.95, 0.95)),
                 )
                 .with_style(Style {
                     margin: UiRect::top(Val::Px(4.0)),
@@ -252,11 +234,7 @@ fn enter_game_over(
                 card.spawn(
                     TextBundle::from_section(
                         "TOP 5 HIGHSCORES",
-                        TextStyle {
-                            font_size: 28.0,
-                            color: Color::srgb(0.4, 0.85, 1.0),
-                            ..default()
-                        },
+                        ts_body(&fonts, 26.0, Color::srgb(0.4, 0.85, 1.0)),
                     )
                     .with_style(Style {
                         margin: UiRect::bottom(Val::Px(6.0)),
@@ -266,12 +244,8 @@ fn enter_game_over(
 
                 if highscores.entries.is_empty() {
                     card.spawn(TextBundle::from_section(
-                        "Noch keine Eintraege — fahr los!",
-                        TextStyle {
-                            font_size: 20.0,
-                            color: Color::srgb(0.7, 0.72, 0.8),
-                            ..default()
-                        },
+                        "Noch keine Einträge - fahr los!",
+                        ts_body(&fonts, 20.0, Color::srgb(0.7, 0.72, 0.8)),
                     ));
                 }
 
@@ -290,11 +264,7 @@ fn enter_game_over(
                             entry.deliveries,
                             entry.date
                         ),
-                        TextStyle {
-                            font_size: 22.0,
-                            color: rank_color,
-                            ..default()
-                        },
+                        ts_body(&fonts, 20.0, rank_color),
                     ));
                 }
             });
@@ -302,11 +272,7 @@ fn enter_game_over(
             p.spawn(
                 TextBundle::from_section(
                     "[LEERTASTE] Nochmal spielen        [Q] Beenden",
-                    TextStyle {
-                        font_size: 24.0,
-                        color: Color::srgb(0.55, 0.95, 0.55),
-                        ..default()
-                    },
+                    ts_body(&fonts, 24.0, Color::srgb(0.55, 0.95, 0.55)),
                 )
                 .with_style(Style {
                     margin: UiRect::top(Val::Px(28.0)),

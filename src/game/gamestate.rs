@@ -2,6 +2,8 @@
 
 use bevy::prelude::*;
 
+use crate::game::assets::{ts_body, ts_display, UiFonts};
+
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum GameState {
     #[default]
@@ -37,7 +39,7 @@ impl Plugin for GameStatePlugin {
     }
 }
 
-fn spawn_main_menu(mut commands: Commands) {
+fn spawn_main_menu(mut commands: Commands, fonts: Res<UiFonts>) {
     commands.spawn((Camera2dBundle::default(), MainMenuMarker));
 
     commands
@@ -71,11 +73,7 @@ fn spawn_main_menu(mut commands: Commands) {
                     t.spawn(
                         TextBundle::from_section(
                             "GERMERING DELIVERY",
-                            TextStyle {
-                                font_size: 76.0,
-                                color: Color::srgb(0.0, 0.0, 0.0),
-                                ..default()
-                            },
+                            ts_display(&fonts, 44.0, Color::srgb(0.0, 0.0, 0.0)),
                         )
                         .with_style(Style {
                             position_type: PositionType::Absolute,
@@ -86,22 +84,14 @@ fn spawn_main_menu(mut commands: Commands) {
                     );
                     t.spawn(TextBundle::from_section(
                         "GERMERING DELIVERY",
-                        TextStyle {
-                            font_size: 76.0,
-                            color: Color::srgb(0.98, 0.82, 0.15),
-                            ..default()
-                        },
+                        ts_display(&fonts, 44.0, Color::srgb(0.98, 0.82, 0.15)),
                     ));
                 });
 
             parent.spawn(
                 TextBundle::from_section(
-                    "Ihle-Sprinter Lieferfahrer — Highscore-Jagd in Germering",
-                    TextStyle {
-                        font_size: 24.0,
-                        color: Color::srgb(0.55, 0.8, 1.0),
-                        ..default()
-                    },
+                    "Ihle-Sprinter Lieferfahrer - Highscore-Jagd in Germering",
+                    ts_body(&fonts, 22.0, Color::srgb(0.55, 0.8, 1.0)),
                 )
                 .with_style(Style {
                     margin: UiRect::vertical(Val::Px(10.0)),
@@ -111,12 +101,8 @@ fn spawn_main_menu(mut commands: Commands) {
 
             parent.spawn(
                 TextBundle::from_section(
-                    "[ LEERTASTE ]  —  Schicht beginnen",
-                    TextStyle {
-                        font_size: 34.0,
-                        color: Color::srgb(0.45, 0.95, 0.5),
-                        ..default()
-                    },
+                    "[ LEERTASTE ]  -  Schicht beginnen",
+                    ts_body(&fonts, 30.0, Color::srgb(0.45, 0.95, 0.5)),
                 )
                 .with_style(Style {
                     margin: UiRect::vertical(Val::Px(26.0)),
@@ -141,28 +127,20 @@ fn spawn_main_menu(mut commands: Commands) {
                 })
                 .with_children(|card| {
                     for (line, color) in [
-                        ("WASD / Pfeiltasten — Fahren", Color::srgb(0.9, 0.9, 0.95)),
-                        ("E — Abholen / Abliefern / Jannick", Color::srgb(0.9, 0.9, 0.95)),
-                        ("LEERTASTE — Nitro-Schub (wenn voll)", Color::srgb(0.5, 0.85, 1.0)),
-                        ("ESC — Pause", Color::srgb(0.9, 0.9, 0.95)),
+                        ("WASD / Pfeiltasten - Fahren", Color::srgb(0.9, 0.9, 0.95)),
+                        ("E - Abholen / Abliefern / Jannick", Color::srgb(0.9, 0.9, 0.95)),
+                        ("LEERTASTE - Nitro-Schub (wenn voll)", Color::srgb(0.5, 0.85, 1.0)),
+                        ("ESC - Pause", Color::srgb(0.9, 0.9, 0.95)),
                     ] {
                         card.spawn(TextBundle::from_section(
                             line,
-                            TextStyle {
-                                font_size: 19.0,
-                                color,
-                                ..default()
-                            },
+                            ts_body(&fonts, 19.0, color),
                         ));
                     }
                     card.spawn(
                         TextBundle::from_section(
-                            "Liefere so viele Pakete wie moeglich aus —\n3 verpasste Kunden und es ist FEIERABEND!",
-                            TextStyle {
-                                font_size: 17.0,
-                                color: Color::srgb(0.7, 0.72, 0.8),
-                                ..default()
-                            },
+                            "Liefere so viele Pakete wie möglich aus -\n3 verpasste Kunden und es ist FEIERABEND!",
+                            ts_body(&fonts, 17.0, Color::srgb(0.7, 0.72, 0.8)),
                         )
                         .with_style(Style {
                             margin: UiRect::top(Val::Px(8.0)),
@@ -213,7 +191,7 @@ fn unpause_input(
     }
 }
 
-fn spawn_pause_menu(mut commands: Commands) {
+fn spawn_pause_menu(mut commands: Commands, fonts: Res<UiFonts>) {
     commands
         .spawn((
             NodeBundle {
@@ -248,19 +226,11 @@ fn spawn_pause_menu(mut commands: Commands) {
             .with_children(|card| {
                 card.spawn(TextBundle::from_section(
                     "PAUSE",
-                    TextStyle {
-                        font_size: 84.0,
-                        color: Color::srgb(0.98, 0.82, 0.15),
-                        ..default()
-                    },
+                    ts_display(&fonts, 52.0, Color::srgb(0.98, 0.82, 0.15)),
                 ));
                 card.spawn(TextBundle::from_section(
                     "[ESC]  weiterspielen",
-                    TextStyle {
-                        font_size: 26.0,
-                        color: Color::srgb(0.5, 0.95, 0.55),
-                        ..default()
-                    },
+                    ts_body(&fonts, 24.0, Color::srgb(0.5, 0.95, 0.55)),
                 ));
             });
         });

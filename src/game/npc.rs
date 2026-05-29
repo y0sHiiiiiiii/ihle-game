@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use rand::prelude::*;
 
-use crate::game::assets::GameAssets;
+use crate::game::assets::{ts_body, GameAssets, UiFonts};
 use crate::game::gamestate::GameState;
 use crate::game::map::{GameMap, TileType, MAP_HEIGHT, MAP_WIDTH};
 use crate::game::player::Player;
@@ -81,6 +81,7 @@ impl Plugin for NpcPlugin {
 fn spawn_npcs(
     mut commands: Commands,
     assets: Res<GameAssets>,
+    fonts: Res<UiFonts>,
     map: Res<GameMap>,
     existing: Query<Entity, Or<(With<Npc>, With<Jannick>, With<JannickHint>)>>,
 ) {
@@ -179,12 +180,8 @@ fn spawn_npcs(
     ))
     .with_children(|p| {
         p.spawn(TextBundle::from_section(
-            "Jannick: [E] - Shop Koelner Eck",
-            TextStyle {
-                font_size: 20.0,
-                color: Color::srgb(0.95, 0.85, 0.2),
-                ..default()
-            },
+            "Jannick: [E] - Shop Kölner Eck",
+            ts_body(&fonts, 20.0, Color::srgb(0.95, 0.85, 0.2)),
         ));
     });
 }

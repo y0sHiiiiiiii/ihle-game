@@ -107,6 +107,18 @@ komplette Sound werden zur Laufzeit prozedural erzeugt:
 - Der Sprinter nutzt **echte Richtungs-Sprites** (kein verzerrtes Rotieren)
   mit animierten Rädern und weichem Schatten
 
+## Schriftart / Font
+
+Die gesamte UI nutzt zwei Pixel-Fonts, die fest in die Binary einkompiliert sind
+(`include_bytes!`, keine losen Laufzeit-Dateien nötig):
+
+- **Press Start 2P** für große Überschriften (Titel, `FEIERABEND!`, `PAUSE`)
+- **Silkscreen** für gut lesbare HUD- und Menütexte
+
+Beide stehen unter der **SIL Open Font License (OFL)** und liegen unter
+`assets/fonts/`. Sie bringen volle Umlaut-Unterstützung mit (ä/ö/ü/ß), daher
+werden Münzen, Kölner Eck & Co. korrekt dargestellt.
+
 ## Bauen und Starten
 
 ```bash

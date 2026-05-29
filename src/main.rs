@@ -49,7 +49,7 @@ fn main() {
             DefaultPlugins
                 .set(WindowPlugin {
                     primary_window: Some(Window {
-                        title: "Germering Delivery — Ihle Sprinter Highscore".into(),
+                        title: "Germering Delivery - Ihle Sprinter Highscore".into(),
                         resolution: WindowResolution::new(1280.0, 720.0),
                         present_mode: PresentMode::AutoVsync,
                         resizable: true,
