@@ -34,7 +34,10 @@ impl Plugin for NaviPlugin {
 pub fn tile_color_for_minimap(t: TileType) -> Rgba {
     match t {
         TileType::Grass | TileType::Park => (78, 138, 65, 255),
+        TileType::Garden => (95, 160, 80, 255),
         TileType::Sidewalk => (175, 175, 180, 255),
+        TileType::Cobble => (158, 150, 140, 255),
+        TileType::Platform => (198, 198, 202, 255),
         TileType::Road
         | TileType::RoadH
         | TileType::RoadV
@@ -42,9 +45,11 @@ pub fn tile_color_for_minimap(t: TileType) -> Rgba {
         | TileType::Parking => (55, 55, 58, 255),
         TileType::Water => (60, 110, 200, 255),
         TileType::House | TileType::Roof => (180, 130, 80, 255),
-        TileType::IhleStore => (30, 80, 180, 255),
+        TileType::Hedge => (52, 110, 48, 255),
+        TileType::IhleStore => (208, 110, 55, 255),
         TileType::JannickStore => (210, 35, 35, 255),
         TileType::Rathaus => (200, 170, 120, 255),
+        TileType::Church => (196, 190, 176, 255),
         TileType::Bahnhof => (160, 130, 90, 255),
         TileType::Rails => (90, 80, 65, 255),
         TileType::Aldi => (40, 80, 180, 255),

@@ -14,6 +14,7 @@ pub mod navi;
 pub mod npc;
 pub mod player;
 pub mod shop;
+pub mod speech;
 
 pub use gamestate::GameState;
 
@@ -33,6 +34,7 @@ impl Plugin for GamePlugin {
                 navi::NaviPlugin,
                 npc::NpcPlugin,
                 shop::ShopPlugin,
+                speech::SpeechPlugin,
                 highscore::HighscorePlugin,
                 hud::HudPlugin,
             ));

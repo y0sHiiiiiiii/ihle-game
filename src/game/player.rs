@@ -3,7 +3,9 @@
 use bevy::prelude::*;
 
 use crate::game::assets::GameAssets;
-use crate::game::map::{GameMap, TileType, MAP_HEIGHT, MAP_WIDTH, TILE_SIZE};
+use crate::game::map::{
+    GameMap, TileType, MAP_HEIGHT, MAP_WIDTH, TILE_SIZE, WORLD_HALF_H, WORLD_HALF_W,
+};
 use crate::game::GameState;
 
 pub const PLAYER_BASE_MAX_SPEED: f32 = 175.0;
@@ -14,10 +16,26 @@ pub const PLAYER_OFFROAD_FACTOR: f32 = 0.6;
 pub const ROTATION_SPEED: f32 = 9.0;
 pub const CAMERA_LERP: f32 = 6.5;
 
+/// On-foot constants — slower, snappier, smaller footprint than the van.
+pub const FOOT_MAX_SPEED: f32 = 78.0;
+pub const FOOT_ACCEL: f32 = 900.0;
+pub const FOOT_FRICTION: f32 = 1100.0;
+pub const FOOT_HITBOX: Vec2 = Vec2::new(7.0, 5.0);
+/// You have to be roughly stopped to hop out, and this close to climb back in.
+pub const EXIT_MAX_SPEED: f32 = 45.0;
+pub const ENTER_RADIUS: f32 = 26.0;
+
 /// Extra top speed while a Nitro burst is active.
 pub const NITRO_FACTOR: f32 = 0.6;
 /// How long one full Nitro burst lasts.
 pub const NITRO_DURATION: f32 = 3.0;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PlayerMode {
+    #[default]
+    InVehicle,
+    OnFoot,
+}
 
 #[derive(Component, Default)]
 pub struct Player {
@@ -33,6 +51,22 @@ pub struct Player {
     pub nitro: f32,
     /// Seconds of Nitro burst still active.
     pub nitro_timer: f32,
+    /// Whether the player is driving the Sprinter or walking on foot.
+    pub mode: PlayerMode,
+}
+
+/// The Sprinter left standing on the street while the player delivers on foot.
+/// Stores the heading so it keeps the right directional sprite, plus a blink
+/// phase for the hazard lights.
+#[derive(Component)]
+pub struct ParkedVan {
+    pub facing: f32,
+}
+
+impl Player {
+    pub fn is_on_foot(&self) -> bool {
+        self.mode == PlayerMode::OnFoot
+    }
 }
 
 impl Player {
@@ -83,10 +117,13 @@ impl Plugin for PlayerPlugin {
                 Update,
                 (
                     player_input,
+                    toggle_vehicle,
                     player_movement,
                     update_player_sprite,
+                    update_player_shadow,
                     camera_follow,
                     update_package_visual,
+                    update_parked_van,
                     tick_boost_timer,
                 )
                     .chain()
@@ -94,11 +131,23 @@ impl Plugin for PlayerPlugin {
             )
             .add_systems(
                 Update,
-                (camera_follow, update_player_sprite).run_if(in_state(GameState::Paused)),
+                (
+                    camera_follow,
+                    update_player_sprite,
+                    update_player_shadow,
+                    update_parked_van,
+                )
+                    .run_if(in_state(GameState::Paused)),
             )
             .add_systems(
                 Update,
-                (camera_follow, update_player_sprite).run_if(in_state(GameState::Shopping)),
+                (
+                    camera_follow,
+                    update_player_sprite,
+                    update_player_shadow,
+                    update_parked_van,
+                )
+                    .run_if(in_state(GameState::Shopping)),
             );
     }
 }
@@ -108,10 +157,14 @@ fn spawn_player(
     assets: Res<GameAssets>,
     map: Res<GameMap>,
     existing: Query<Entity, With<Player>>,
+    parked: Query<Entity, With<ParkedVan>>,
     cams: Query<Entity, With<PlayerCamera>>,
     menu_cams: Query<Entity, (With<Camera>, Without<PlayerCamera>)>,
 ) {
     for e in &existing {
+        commands.entity(e).despawn_recursive();
+    }
+    for e in &parked {
         commands.entity(e).despawn_recursive();
     }
     for e in &cams {
@@ -180,9 +233,13 @@ fn spawn_player(
 fn despawn_player_on_reset(
     mut commands: Commands,
     players: Query<Entity, With<Player>>,
+    parked: Query<Entity, With<ParkedVan>>,
     cams: Query<Entity, With<PlayerCamera>>,
 ) {
     for e in &players {
+        commands.entity(e).despawn_recursive();
+    }
+    for e in &parked {
         commands.entity(e).despawn_recursive();
     }
     for e in &cams {
@@ -218,8 +275,9 @@ fn player_input(
         player.last_input_dir
     };
 
-    // Nitro: a full meter can be spent for a strong burst.
-    if (keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::ShiftLeft))
+    // Nitro: a full meter can be spent for a strong burst (only while driving).
+    if !player.is_on_foot()
+        && (keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::ShiftLeft))
         && player.nitro >= 1.0
         && player.nitro_timer <= 0.0
     {
@@ -267,15 +325,25 @@ fn player_movement(
             | TileType::Parking
     );
 
-    let surface_factor = if on_road { 1.0 } else { PLAYER_OFFROAD_FACTOR };
-    let max_speed = player.current_max_speed() * surface_factor;
+    let on_foot = player.is_on_foot();
+    let (max_speed, accel, friction, hitbox) = if on_foot {
+        (FOOT_MAX_SPEED, FOOT_ACCEL, FOOT_FRICTION, FOOT_HITBOX)
+    } else {
+        let surface_factor = if on_road { 1.0 } else { PLAYER_OFFROAD_FACTOR };
+        (
+            player.current_max_speed() * surface_factor,
+            PLAYER_ACCEL,
+            PLAYER_FRICTION,
+            PLAYER_HITBOX,
+        )
+    };
 
     let target = dir * max_speed;
     let delta = target - player.velocity;
     let max_step = if dir != Vec2::ZERO {
-        PLAYER_ACCEL * dt
+        accel * dt
     } else {
-        PLAYER_FRICTION * dt
+        friction * dt
     };
     if delta.length() < max_step {
         player.velocity = target;
@@ -288,9 +356,9 @@ fn player_movement(
     let pos = transform.translation;
 
     let mut new_x = pos.x + step.x;
-    if step.x.abs() > 0.0 && collides_at(&map, Vec2::new(new_x, pos.y)) {
+    if step.x.abs() > 0.0 && collides_at(&map, Vec2::new(new_x, pos.y), hitbox) {
         new_x = pos.x;
-        if player.velocity.x.abs() > 60.0 {
+        if !on_foot && player.velocity.x.abs() > 60.0 {
             bump_events.send(CollisionBumpEvent {
                 pos: pos.truncate(),
             });
@@ -299,9 +367,9 @@ fn player_movement(
     }
 
     let mut new_y = pos.y + step.y;
-    if step.y.abs() > 0.0 && collides_at(&map, Vec2::new(new_x, new_y)) {
+    if step.y.abs() > 0.0 && collides_at(&map, Vec2::new(new_x, new_y), hitbox) {
         new_y = pos.y;
-        if player.velocity.y.abs() > 60.0 {
+        if !on_foot && player.velocity.y.abs() > 60.0 {
             bump_events.send(CollisionBumpEvent {
                 pos: pos.truncate(),
             });
@@ -309,8 +377,8 @@ fn player_movement(
         player.velocity.y = -player.velocity.y * 0.2;
     }
 
-    let clamp_w = (MAP_WIDTH as f32 * TILE_SIZE) * 0.5 - PLAYER_HITBOX.x;
-    let clamp_h = (MAP_HEIGHT as f32 * TILE_SIZE) * 0.5 - PLAYER_HITBOX.y;
+    let clamp_w = (MAP_WIDTH as f32 * TILE_SIZE) * 0.5 - hitbox.x;
+    let clamp_h = (MAP_HEIGHT as f32 * TILE_SIZE) * 0.5 - hitbox.y;
     transform.translation.x = new_x.clamp(-clamp_w, clamp_w);
     transform.translation.y = new_y.clamp(-clamp_h, clamp_h);
 
@@ -331,16 +399,16 @@ fn player_movement(
     }
 
     // Charge the Nitro meter by actually driving — faster on tarmac.
-    if player.nitro_timer <= 0.0 && player.nitro < 1.0 {
+    if !on_foot && player.nitro_timer <= 0.0 && player.nitro < 1.0 {
         let speed_frac = (player.velocity.length() / PLAYER_BASE_MAX_SPEED).clamp(0.0, 1.0);
         let rate = if on_road { 0.115 } else { 0.05 };
         player.nitro = (player.nitro + rate * speed_frac * dt).min(1.0);
     }
 }
 
-fn collides_at(map: &GameMap, pos: Vec2) -> bool {
-    let half_w = PLAYER_HITBOX.x * 0.5;
-    let half_h = PLAYER_HITBOX.y * 0.5;
+fn collides_at(map: &GameMap, pos: Vec2, hitbox: Vec2) -> bool {
+    let half_w = hitbox.x * 0.5;
+    let half_h = hitbox.y * 0.5;
     let corners = [
         Vec2::new(pos.x - half_w, pos.y - half_h),
         Vec2::new(pos.x + half_w, pos.y - half_h),
@@ -367,6 +435,19 @@ fn update_player_sprite(
     };
     // No bitmap rotation — pick a clean directional sprite instead.
     transform.rotation = Quat::IDENTITY;
+
+    // On foot: a single little driver sprite, flipped to face the walk direction.
+    if player.is_on_foot() {
+        if texture.id() != assets.player_foot.id() {
+            *texture = assets.player_foot.clone();
+        }
+        let dir = Vec2::from_angle(player.facing);
+        sprite.custom_size = Some(Vec2::new(14.0, 19.0));
+        sprite.flip_x = dir.x < 0.0;
+        sprite.flip_y = false;
+        sprite.color = Color::WHITE;
+        return;
+    }
 
     let speed = player.velocity.length();
     player.wheel_phase += speed * time.delta_seconds() * 0.18;
@@ -424,12 +505,12 @@ fn camera_follow(
     time: Res<Time>,
     shake: Res<crate::game::fx::ScreenShake>,
     player_q: Query<(&Transform, &Player), Without<PlayerCamera>>,
-    mut cam_q: Query<&mut Transform, With<PlayerCamera>>,
+    mut cam_q: Query<(&mut Transform, &OrthographicProjection), With<PlayerCamera>>,
 ) {
     let Ok((player_tr, player)) = player_q.get_single() else {
         return;
     };
-    let Ok(mut cam) = cam_q.get_single_mut() else {
+    let Ok((mut cam, projection)) = cam_q.get_single_mut() else {
         return;
     };
     // Look slightly ahead in the direction of travel for a more dynamic feel.
@@ -446,8 +527,151 @@ fn camera_follow(
         new.x += (et * 47.0).sin() * amount * 11.0;
         new.y += (et * 59.0).cos() * amount * 11.0;
     }
+
+    // Keep the visible area inside the map — never show beyond the edges.
+    let half = projection.area.half_size();
+    let limit_x = (WORLD_HALF_W - half.x).max(0.0);
+    let limit_y = (WORLD_HALF_H - half.y).max(0.0);
+    new.x = new.x.clamp(-limit_x, limit_x);
+    new.y = new.y.clamp(-limit_y, limit_y);
+
     cam.translation.x = new.x;
     cam.translation.y = new.y;
+}
+
+/// Hop out of the Sprinter to deliver on foot (and climb back in). Exiting needs
+/// the van roughly stopped; the parked van is left behind with hazards blinking.
+fn toggle_vehicle(
+    keys: Res<ButtonInput<KeyCode>>,
+    assets: Res<GameAssets>,
+    map: Res<GameMap>,
+    mut commands: Commands,
+    mut player_q: Query<(&mut Transform, &mut Player)>,
+    parked_q: Query<(Entity, &Transform), (With<ParkedVan>, Without<Player>)>,
+) {
+    if !keys.just_pressed(KeyCode::KeyF) {
+        return;
+    }
+    let Ok((mut p_tr, mut player)) = player_q.get_single_mut() else {
+        return;
+    };
+
+    match player.mode {
+        PlayerMode::InVehicle => {
+            if player.velocity.length() > EXIT_MAX_SPEED {
+                return; // can't bail out at speed
+            }
+            let van_pos = p_tr.translation;
+            let facing = player.facing;
+            commands.spawn((
+                SpriteBundle {
+                    texture: assets.sprinter.clone(),
+                    transform: Transform::from_xyz(van_pos.x, van_pos.y, 9.5),
+                    sprite: Sprite {
+                        custom_size: Some(Vec2::new(28.0, 18.0)),
+                        ..default()
+                    },
+                    ..default()
+                },
+                ParkedVan { facing },
+            ));
+            let foot = step_out_position(&map, van_pos.truncate(), facing);
+            p_tr.translation.x = foot.x;
+            p_tr.translation.y = foot.y;
+            player.mode = PlayerMode::OnFoot;
+            player.velocity = Vec2::ZERO;
+        }
+        PlayerMode::OnFoot => {
+            let foot = p_tr.translation.truncate();
+            let mut nearest: Option<(Entity, Vec2)> = None;
+            for (e, tr) in &parked_q {
+                let vp = tr.translation.truncate();
+                if foot.distance(vp) <= ENTER_RADIUS {
+                    nearest = Some((e, vp));
+                    break;
+                }
+            }
+            if let Some((e, vp)) = nearest {
+                commands.entity(e).despawn_recursive();
+                p_tr.translation.x = vp.x;
+                p_tr.translation.y = vp.y;
+                player.mode = PlayerMode::InVehicle;
+                player.velocity = Vec2::ZERO;
+            }
+        }
+    }
+}
+
+/// Find a clear spot beside/behind the van for the driver to step out onto.
+fn step_out_position(map: &GameMap, van: Vec2, facing: f32) -> Vec2 {
+    let dir = Vec2::from_angle(facing);
+    let side = Vec2::new(-dir.y, dir.x);
+    let candidates = [side * 16.0, -side * 16.0, -dir * 18.0, dir * 18.0];
+    for off in candidates {
+        let p = van + off;
+        if !collides_at(map, p, FOOT_HITBOX) {
+            return p;
+        }
+    }
+    van
+}
+
+/// Keep the parked van showing the right directional sprite and blink its hazard
+/// lights so it reads as "parked on the street".
+fn update_parked_van(
+    time: Res<Time>,
+    assets: Res<GameAssets>,
+    mut q: Query<(&ParkedVan, &mut Handle<Image>, &mut Sprite)>,
+) {
+    let blink = (time.elapsed_seconds() * 5.0).sin() > 0.0;
+    for (van, mut texture, mut sprite) in &mut q {
+        let dir = Vec2::from_angle(van.facing);
+        let horizontal = dir.x.abs() >= dir.y.abs();
+        let (handle, size, flip_x, flip_y) = if horizontal {
+            (
+                assets.van_side[0].clone(),
+                Vec2::new(30.0, 20.0),
+                dir.x < 0.0,
+                false,
+            )
+        } else {
+            (
+                assets.van_top[0].clone(),
+                Vec2::new(20.0, 30.0),
+                false,
+                dir.y < 0.0,
+            )
+        };
+        if texture.id() != handle.id() {
+            *texture = handle;
+        }
+        sprite.custom_size = Some(size);
+        sprite.flip_x = flip_x;
+        sprite.flip_y = flip_y;
+        sprite.color = if blink {
+            Color::srgb(1.0, 0.72, 0.18)
+        } else {
+            Color::WHITE
+        };
+    }
+}
+
+/// Shrink the soft shadow when the player is on foot, restore it in the van.
+fn update_player_shadow(
+    player_q: Query<&Player>,
+    mut shadow_q: Query<&mut Sprite, With<ShadowVisual>>,
+) {
+    let Ok(player) = player_q.get_single() else {
+        return;
+    };
+    let size = if player.is_on_foot() {
+        Vec2::new(13.0, 7.0)
+    } else {
+        Vec2::new(30.0, 16.0)
+    };
+    for mut sprite in &mut shadow_q {
+        sprite.custom_size = Some(size);
+    }
 }
 
 fn tick_boost_timer(time: Res<Time>, mut q: Query<&mut Player>) {

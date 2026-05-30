@@ -705,26 +705,35 @@ fn update_late_banner(
 /// pickup or dropoff — the same affordance Jannick's shop already has.
 fn update_interact_hint(
     active: Option<Res<ActiveDelivery>>,
-    player_q: Query<&Transform, With<Player>>,
+    player_q: Query<(&Transform, &Player)>,
     mut hint_q: Query<(&mut Style, &Children), With<InteractHint>>,
     mut text_q: Query<&mut Text>,
 ) {
     let Ok((mut style, children)) = hint_q.get_single_mut() else {
         return;
     };
-    let (Some(active), Ok(player_tr)) = (active, player_q.get_single()) else {
+    let (Some(active), Ok((player_tr, player))) = (active, player_q.get_single()) else {
         style.display = Display::None;
         return;
     };
     let pos = player_tr.translation.truncate();
+    let on_foot = player.is_on_foot();
     let (target, msg) = match active.phase {
         DeliveryPhase::GoToPickup => (
             GameMap::tile_to_world(active.pickup.interact_tile),
-            "[E] Paket abholen",
+            if on_foot {
+                "[F] Einsteigen zum Abholen"
+            } else {
+                "[E] Paket abholen"
+            },
         ),
         DeliveryPhase::GoToDropoff => (
             GameMap::tile_to_world(active.dropoff.tile),
-            "[E] Hier abliefern",
+            if on_foot {
+                "[E] Hier abliefern"
+            } else {
+                "[F] Aussteigen zum Abliefern"
+            },
         ),
     };
     if pos.distance(target) <= INTERACT_RADIUS {

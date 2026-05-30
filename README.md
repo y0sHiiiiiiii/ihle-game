@@ -17,8 +17,9 @@ umtauschen — beides gibt einen zusätzlichen Speed-Boost.
 
 | Taste | Aktion |
 |---|---|
-| W / A / S / D oder Pfeiltasten | Sprinter fahren (mit Trägheit) |
+| W / A / S / D oder Pfeiltasten | Sprinter fahren (mit Trägheit) bzw. zu Fuß laufen |
 | **LEERTASTE** (im Spiel) | **Nitro-Schub zünden** (wenn die Leiste voll ist) |
+| **F** | **Aussteigen / Einsteigen** (zum Abliefern zu Fuß) |
 | E | Interagieren (Paket abholen, abliefern, Shop öffnen, Pizza/Kaffee kaufen) |
 | 1 / 2 (im Shop) | Pizza / Kaffee kaufen |
 | ESC | Pause (im Spiel) bzw. Shop verlassen |
@@ -39,10 +40,12 @@ eine Abgasfahne, solange ein Boost aktiv ist.
 
 1. Im Hauptmenü mit `LEERTASTE` ins Spiel starten.
 2. Ein **blauer Pickup-Marker** erscheint über einer der vier Ihle-Filialen
-   (Bahnhof, Zentrum, Nord, Süd). Fahre dort hin und drücke `E`, um das
-   Paket zu laden.
-3. Ein **rotes blinkendes X** erscheint an der Kundenadresse. Fahre dort
-   hin und drücke `E`, um zu liefern.
+   (Bahnhof, Zentrum, Nord, Süd). Vor jeder Filiale gibt es eine **Parkbucht** —
+   fahre hinein und drücke `E`, um das Paket bequem aus dem Sprinter zu laden.
+3. Ein **rotes blinkendes X** erscheint an der Kundenadresse, wo eine **echte
+   Person** auf ihr Paket wartet. Parke in der Nähe, **steig mit `F` aus** (der
+   Sprinter bleibt mit Warnblinker stehen), geh zu Fuß zur Tür und drücke `E`.
+   Der Kunde bedankt sich auf Bairisch. Danach steigst du mit `F` wieder ein.
 4. Score- und Münz-Belohnungen werden gutgeschrieben, der nächste Auftrag
    startet sofort.
 5. Wenn der Timer abläuft, verlierst du ein Leben. Nach drei verlorenen
@@ -77,6 +80,7 @@ Ein verpasster Kunde setzt die Streak zurück — Tempo lohnt sich also doppelt.
 ## Jannicks Kölner Eck
 
 In der Hauptstraße steht Jannicks Pizzeria (rot/weiße Markise + Kölner Dom).
+Fährst du nah vorbei, ruft Jannick dir spontan einen Kölsch-Spruch hinterher.
 Wenn du mit dem Sprinter nahe vorbeikommst, blendet das Spiel einen Hinweis ein.
 Mit `E` öffnest du Jannicks Shop. Pause, Kölsch-Sprüche und das Menü:
 
@@ -99,11 +103,20 @@ im Game-Over-Screen golden.
 Es werden **keine externen Dateien** benötigt — alle Sprites *und* der
 komplette Sound werden zur Laufzeit prozedural erzeugt:
 
+- **Hintergrundmusik**: ein loopender, fröhlicher Chiptune im Mario-Stil
+  (eigene Komposition, Square-Wave-Melodie über pulsierendem Bass)
 - **Motorgeräusch**, dessen Tonhöhe und Lautstärke mit dem Tempo mitgehen
+  (verstummt, wenn du aussteigst und der Sprinter geparkt blinkt)
 - **Liefer-Jingle**, Münz-Klimpern, Crash-Rumms, Nitro-Whoosh und ein
   unfreundlicher Buzzer, wenn ein Kunde aufgibt
 - **Game Feel:** Screen-Shake bei Crashes und Lieferungen, Münz- und
-  Funken-Partikel, Abgaswolken bei Nitro und eine leicht vorausschauende Kamera
+  Funken-Partikel, Abgaswolken bei Nitro und eine leicht vorausschauende Kamera,
+  die am Kartenrand stehen bleibt
+- **Lebendige Stadt:** ~16 fahrende Autos auf dem Straßennetz und viele
+  Passanten. An jeder Kreuzung stehen **Ampeln** — Autos halten bei Rot und
+  fahren bei Grün, Fußgänger queren die Zebrastreifen nur bei Grün und bleiben
+  sonst auf dem Gehweg. Wer mit Tempo in Autos oder Fußgänger kracht, kassiert
+  einen wütenden bairischen Spruch (aber keine Zeit-/Münzstrafe)
 - Der Sprinter nutzt **echte Richtungs-Sprites** (kein verzerrtes Rotieren)
   mit animierten Rädern und weichem Schatten
 
@@ -126,19 +139,27 @@ cargo run --release
 ```
 
 Beim ersten Build kann es einige Minuten dauern, weil Bevy kompiliert wird.
+Das Spiel startet im **Vollbild** (randloser Fullscreen).
 
 ## Stadt
 
-Die 128×128-Pixelart-Karte ist an Germering orientiert und enthält:
+Die 128×128-Pixelart-Karte ist an Germering orientiert: ein Netz aus großen
+**Hauptachsen** (mit Ampeln) und engmaschigen **Nebenstraßen**, dazwischen dicht
+bebaute Wohnblöcke mit Vorgärten, Hecken und Bäumen statt leerem Gras.
 
-- **Rathaus Germering** (Kirchenplatz)
-- **Bahnhof Germering** mit S-Bahn-Gleisen (S8)
-- **Aldi Süd** in der Unteren Bahnhofstraße
-- **Rewe** im Zentrum
-- **Vier Ihle-Filialen** (Bahnhof, Zentrum, Nord, Süd)
-- **Jannicks Kölner Eck** an der Hauptstraße
-- **Hauptstraße / Untere Bahnhofstraße / Eichenauer Straße** als Hauptachsen
-- **Stadtpark Nord** und Grünflächen
-- Wohnblöcke mit gemischten Einfamilien-/Mehrfamilienhäusern
+Enthalten sind u. a.:
+
+- **Vier Ihle-Bäckereien** (Bahnhof, Zentrum, Nord, Süd) im warmen Bäckerei-Look
+  mit rot/weißer Markise, „IHLE"-Schild, Brezn und Schaufenster — jeweils mit
+  eigener **Parkbucht** zum bequemen Beladen
+- **Kirchplatz** als Kopfsteinpflaster-Platz mit **St.-Martin-Kirche** und
+  Brunnen, daneben das **Rathaus**
+- **Bahnhof Germering** mit **Bahnsteig** und durchgehenden **S8-Gleisen**
+- **Aldi Süd** und **Rewe** mit eigenem Parkplatz an der Nord-Achse
+- **Jannicks Kölner Eck** an der Hauptstraße (rot/weiße Markise + Kölner Dom)
+- **Stadtpark Nord**, **Germeringer See** und der **Wittelsbacherpark** als
+  Grünflächen mit Bäumen und Wasser
+- Straßennamen wie Augsburger Str., Münchner Str., Untere Bahnhofstr.,
+  Kirchenstr. und Wittelsbacher Str.
 
 Viel Spaß beim Liefern!

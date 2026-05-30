@@ -9,7 +9,7 @@
 use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
-use bevy::window::{PresentMode, WindowResolution};
+use bevy::window::{PresentMode, WindowMode, WindowResolution};
 
 mod game;
 
@@ -52,6 +52,7 @@ fn main() {
                         title: "Germering Delivery - Ihle Sprinter Highscore".into(),
                         resolution: WindowResolution::new(1280.0, 720.0),
                         present_mode: PresentMode::AutoVsync,
+                        mode: WindowMode::BorderlessFullscreen,
                         resizable: true,
                         ..default()
                     }),

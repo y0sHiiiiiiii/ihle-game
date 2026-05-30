@@ -1,4 +1,10 @@
 //! Germering-Tilemap: 128x128 Tiles, an der echten Stadt orientiert.
+//!
+//! Aufbau: ein Haupt-Arterien-Raster (mit Ampeln, siehe `npc.rs`) plus
+//! engmaschige Nebenstraßen, dazwischen dicht bebaute Wohnblöcke mit Vorgärten
+//! und Hecken. Eingestreut: vier Ihle-Bäckereien, Kirchplatz mit St. Martin,
+//! Rathaus, Bahnhof mit Bahnsteig & S8-Gleisen, Aldi/Rewe mit Parkplatz,
+//! Jannicks Kölner Eck, Stadtpark und Germeringer See.
 
 use bevy::prelude::*;
 use bevy::render::render_asset::RenderAssetUsages;
@@ -14,11 +20,23 @@ pub const MAP_HEIGHT: i32 = 128;
 pub const WORLD_HALF_W: f32 = MAP_WIDTH as f32 * TILE_SIZE * 0.5;
 pub const WORLD_HALF_H: f32 = MAP_HEIGHT as f32 * TILE_SIZE * 0.5;
 
+/// Centre rows/cols of the *arterial* road grid — also the intersection
+/// coordinates where traffic lights sit (consumed by `npc.rs`).
+pub const ROAD_H_ROWS: [i32; 5] = [22, 42, 64, 86, 108];
+pub const ROAD_V_COLS: [i32; 4] = [20, 48, 76, 104];
+
+/// Narrower residential side streets woven between the arterials. They carry
+/// cars too (they are normal road tiles) but have no traffic lights.
+const SIDE_H_ROWS: [i32; 4] = [32, 53, 75, 97];
+const SIDE_V_COLS: [i32; 3] = [34, 62, 90];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TileType {
     Grass,
     Park,
+    Garden,
     Sidewalk,
+    Cobble,
     Road,
     RoadH,
     RoadV,
@@ -26,10 +44,13 @@ pub enum TileType {
     Water,
     House,
     Roof,
+    Hedge,
     IhleStore,
     JannickStore,
     Rathaus,
+    Church,
     Bahnhof,
+    Platform,
     Rails,
     Aldi,
     Rewe,
@@ -43,9 +64,11 @@ impl TileType {
             self,
             TileType::House
                 | TileType::Roof
+                | TileType::Hedge
                 | TileType::IhleStore
                 | TileType::JannickStore
                 | TileType::Rathaus
+                | TileType::Church
                 | TileType::Bahnhof
                 | TileType::Rails
                 | TileType::Aldi
@@ -113,6 +136,23 @@ impl GameMap {
             tile.y as f32 * TILE_SIZE - WORLD_HALF_H + TILE_SIZE * 0.5,
         )
     }
+
+    /// True if a tile can be driven on by traffic (carriageway, not parking bay).
+    pub fn is_road(&self, x: i32, y: i32) -> bool {
+        matches!(
+            self.tile_at(x, y),
+            TileType::Road | TileType::RoadH | TileType::RoadV | TileType::Crosswalk
+        )
+    }
+
+    /// True if a pedestrian may stand here — pavements, squares, platforms and
+    /// zebra crossings.
+    pub fn is_walkable(&self, x: i32, y: i32) -> bool {
+        matches!(
+            self.tile_at(x, y),
+            TileType::Sidewalk | TileType::Crosswalk | TileType::Cobble | TileType::Platform
+        )
+    }
 }
 
 #[derive(Component)]
@@ -127,48 +167,37 @@ impl Plugin for MapPlugin {
     }
 }
 
+#[inline]
+fn set_t(tiles: &mut [TileType], x: i32, y: i32, t: TileType) {
+    if x >= 0 && y >= 0 && x < MAP_WIDTH && y < MAP_HEIGHT {
+        tiles[(y * MAP_WIDTH + x) as usize] = t;
+    }
+}
+
+#[inline]
+fn get_t(tiles: &[TileType], x: i32, y: i32) -> TileType {
+    if x < 0 || y < 0 || x >= MAP_WIDTH || y >= MAP_HEIGHT {
+        return TileType::Grass;
+    }
+    tiles[(y * MAP_WIDTH + x) as usize]
+}
+
+fn fill_t(tiles: &mut [TileType], x0: i32, y0: i32, x1: i32, y1: i32, t: TileType) {
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            set_t(tiles, x, y, t);
+        }
+    }
+}
+
 fn generate_map(mut commands: Commands) {
     let mut tiles = vec![TileType::Grass; (MAP_WIDTH * MAP_HEIGHT) as usize];
 
-    let set_t = |tiles: &mut Vec<TileType>, x: i32, y: i32, t: TileType| {
-        if x >= 0 && y >= 0 && x < MAP_WIDTH && y < MAP_HEIGHT {
-            tiles[(y * MAP_WIDTH + x) as usize] = t;
-        }
-    };
+    // --- Road network (arterials + side streets) ------------------------------
+    let all_h: Vec<i32> = ROAD_H_ROWS.iter().chain(SIDE_H_ROWS.iter()).copied().collect();
+    let all_v: Vec<i32> = ROAD_V_COLS.iter().chain(SIDE_V_COLS.iter()).copied().collect();
 
-    for y in 10..18 {
-        for x in 8..30 {
-            set_t(&mut tiles, x, y, TileType::Park);
-            if (x + y * 3) % 17 == 0 {
-                set_t(&mut tiles, x, y, TileType::Tree);
-            }
-        }
-    }
-
-    for y in 100..118 {
-        for x in 100..125 {
-            set_t(&mut tiles, x, y, TileType::Park);
-            if (x * 5 + y) % 19 == 0 {
-                set_t(&mut tiles, x, y, TileType::Tree);
-            }
-        }
-    }
-
-    for y in 60..70 {
-        for x in 0..32 {
-            set_t(&mut tiles, x, y, TileType::Water);
-        }
-    }
-    for y in 62..68 {
-        for x in 32..48 {
-            set_t(&mut tiles, x, y, TileType::Water);
-        }
-    }
-
-    let road_h_rows = [22i32, 42, 64, 86, 108];
-    let road_v_cols = [20i32, 48, 76, 104];
-
-    for &y in &road_h_rows {
+    for &y in &all_h {
         for x in 0..MAP_WIDTH {
             set_t(&mut tiles, x, y - 1, TileType::Sidewalk);
             set_t(&mut tiles, x, y, TileType::RoadH);
@@ -176,7 +205,7 @@ fn generate_map(mut commands: Commands) {
             set_t(&mut tiles, x, y + 2, TileType::Sidewalk);
         }
     }
-    for &x in &road_v_cols {
+    for &x in &all_v {
         for y in 0..MAP_HEIGHT {
             set_t(&mut tiles, x - 1, y, TileType::Sidewalk);
             set_t(&mut tiles, x, y, TileType::RoadV);
@@ -185,13 +214,17 @@ fn generate_map(mut commands: Commands) {
         }
     }
 
-    for &y in &road_h_rows {
-        for &x in &road_v_cols {
-            for dx in -1..=2 {
-                for dy in -1..=2 {
-                    set_t(&mut tiles, x + dx, y + dy, TileType::Road);
-                }
-            }
+    // Every road crossing gets a small asphalt core so cars can turn cleanly.
+    for &y in &all_h {
+        for &x in &all_v {
+            fill_t(&mut tiles, x, y, x + 1, y + 1, TileType::Road);
+        }
+    }
+
+    // Zebra crossings only on the big arterial intersections (matches lights).
+    for &y in &ROAD_H_ROWS {
+        for &x in &ROAD_V_COLS {
+            fill_t(&mut tiles, x - 1, y, x + 2, y + 1, TileType::Road);
             set_t(&mut tiles, x - 2, y, TileType::Crosswalk);
             set_t(&mut tiles, x - 2, y + 1, TileType::Crosswalk);
             set_t(&mut tiles, x + 3, y, TileType::Crosswalk);
@@ -203,223 +236,154 @@ fn generate_map(mut commands: Commands) {
         }
     }
 
-    let house_blocks = [
-        (3, 25, 16, 14),
-        (25, 25, 22, 14),
-        (51, 25, 22, 14),
-        (79, 25, 22, 14),
-        (107, 25, 18, 14),
-        (3, 45, 16, 16),
-        (51, 45, 22, 16),
-        (79, 45, 22, 16),
-        (107, 45, 18, 16),
-        (3, 67, 16, 18),
-        (25, 67, 22, 18),
-        (51, 67, 22, 18),
-        (79, 67, 22, 18),
-        (107, 67, 18, 18),
-        (3, 89, 16, 16),
-        (51, 89, 22, 16),
-        (79, 89, 22, 16),
-        (107, 89, 18, 16),
-        (25, 111, 22, 14),
-        (51, 111, 22, 14),
-        (79, 111, 22, 14),
-        (107, 111, 18, 14),
+    // --- Residential blocks in the gaps between the roads ----------------------
+    // Free spans (inclusive) computed from the road bands above.
+    let row_spans: [(i32, i32); 10] = [
+        (0, 20),
+        (25, 30),
+        (35, 40),
+        (45, 51),
+        (56, 62),
+        (67, 73),
+        (78, 84),
+        (89, 95),
+        (100, 106),
+        (111, 127),
+    ];
+    let col_spans: [(i32, i32); 8] = [
+        (0, 18),
+        (23, 32),
+        (37, 46),
+        (51, 60),
+        (65, 74),
+        (79, 88),
+        (93, 102),
+        (107, 127),
     ];
 
-    for &(bx, by, bw, bh) in &house_blocks {
-        place_block(&mut tiles, bx, by, bw, bh);
+    for &(ry0, ry1) in &row_spans {
+        for &(rx0, rx1) in &col_spans {
+            place_residential(&mut tiles, rx0, ry0, rx1, ry1);
+        }
     }
 
-    let rathaus_rect = (54, 54, 8, 6);
+    // --- Green spaces ----------------------------------------------------------
+    // Stadtpark Nord (NW corner) with a pond and tree clusters.
+    place_park(&mut tiles, 1, 1, 18, 20);
+    fill_t(&mut tiles, 5, 4, 14, 10, TileType::Water);
+    fill_t(&mut tiles, 8, 13, 11, 13, TileType::Cobble); // a path stub
+    // Germeringer See (small lake on the west flank).
+    place_park(&mut tiles, 1, 56, 17, 62);
+    fill_t(&mut tiles, 2, 57, 15, 61, TileType::Water);
+    // Wittelsbacherpark (SE corner).
+    place_park(&mut tiles, 108, 111, 126, 126);
+
+    // --- Kirchplatz: cobbled square with St. Martin + fountain -----------------
+    fill_t(&mut tiles, 51, 56, 60, 62, TileType::Cobble);
+    place_landmark(&mut tiles, (53, 56, 5, 5), TileType::Church);
+    fill_t(&mut tiles, 58, 60, 59, 61, TileType::Water); // little fountain
+    set_t(&mut tiles, 51, 62, TileType::Tree);
+    set_t(&mut tiles, 60, 56, TileType::Tree);
+
+    // Rathaus on its own apron just west of the square.
+    fill_t(&mut tiles, 37, 56, 46, 62, TileType::Cobble);
+    let rathaus_rect = (38, 57, 8, 4);
     place_landmark(&mut tiles, rathaus_rect, TileType::Rathaus);
 
-    let bahnhof_rect = (28, 89, 12, 6);
+    // --- Bahnhof Germering + Bahnsteig + S8-Gleise -----------------------------
+    let bahnhof_rect = (24, 89, 9, 3);
+    fill_t(&mut tiles, 23, 89, 46, 93, TileType::Cobble); // forecourt + platform base
     place_landmark(&mut tiles, bahnhof_rect, TileType::Bahnhof);
+    fill_t(&mut tiles, 24, 92, 46, 93, TileType::Platform);
     for x in 0..MAP_WIDTH {
         if !matches!(
-            tiles[(95 * MAP_WIDTH + x) as usize],
+            get_t(&tiles, x, 94),
+            TileType::RoadV | TileType::Road | TileType::Sidewalk
+        ) {
+            set_t(&mut tiles, x, 94, TileType::Rails);
+        }
+        if !matches!(
+            get_t(&tiles, x, 95),
             TileType::RoadV | TileType::Road | TileType::Sidewalk
         ) {
             set_t(&mut tiles, x, 95, TileType::Rails);
         }
-        if !matches!(
-            tiles[(96 * MAP_WIDTH + x) as usize],
-            TileType::RoadV | TileType::Road | TileType::Sidewalk
-        ) {
-            set_t(&mut tiles, x, 96, TileType::Rails);
-        }
     }
 
-    let aldi_rect = (94, 16, 9, 5);
-    place_landmark(&mut tiles, aldi_rect, TileType::Aldi);
+    // --- Supermärkte mit Parkplatz (Nord-Achse) --------------------------------
+    place_store_with_lot(&mut tiles, 94, 25, 9, 4, TileType::Aldi);
+    place_store_with_lot(&mut tiles, 66, 25, 9, 4, TileType::Rewe);
 
-    let rewe_rect = (60, 16, 9, 5);
-    place_landmark(&mut tiles, rewe_rect, TileType::Rewe);
+    // --- Jannicks Kölner Eck an der Hauptstraße --------------------------------
+    fill_t(&mut tiles, 83, 56, 88, 62, TileType::Cobble);
+    place_landmark(&mut tiles, (84, 56, 5, 3), TileType::JannickStore);
+    fill_t(&mut tiles, 84, 59, 88, 60, TileType::Parking);
 
-    let ihle_bahnhof = (40, 91, 5, 3);
-    place_landmark(&mut tiles, ihle_bahnhof, TileType::IhleStore);
-
-    let ihle_zentrum = (66, 56, 5, 3);
-    place_landmark(&mut tiles, ihle_zentrum, TileType::IhleStore);
-
-    let ihle_nord = (50, 16, 5, 3);
-    place_landmark(&mut tiles, ihle_nord, TileType::IhleStore);
-
-    let ihle_sued = (50, 112, 5, 3);
-    place_landmark(&mut tiles, ihle_sued, TileType::IhleStore);
-
-    let jannick_rect = (84, 60, 5, 3);
-    place_landmark(&mut tiles, jannick_rect, TileType::JannickStore);
-
-    let parking_rects = [(94, 22, 10, 2), (60, 22, 10, 2), (30, 95, 12, 2)];
-    for &(x, y, w, h) in &parking_rects {
-        for dy in 0..h {
-            for dx in 0..w {
-                set_t(&mut tiles, x + dx, y + dy, TileType::Parking);
-            }
-        }
-    }
-
-    let parking_landmark = (110, 64, 6, 4);
-    for dy in 0..parking_landmark.3 {
-        for dx in 0..parking_landmark.2 {
-            set_t(
-                &mut tiles,
-                parking_landmark.0 + dx,
-                parking_landmark.1 + dy,
-                TileType::Parking,
-            );
-        }
-    }
+    // --- Vier Ihle-Bäckereien (mit Parkbucht zur Straße hin) -------------------
+    let ihle_nord = place_ihle(&mut tiles, 38, 16);
+    let ihle_zentrum = place_ihle(&mut tiles, 52, 36);
+    let ihle_bahnhof = place_ihle(&mut tiles, 66, 80);
+    let ihle_sued = place_ihle(&mut tiles, 52, 102);
 
     let ihle_stores = vec![
-        Landmark {
-            name: "Ihle Bahnhof".to_string(),
-            kind: LandmarkKind::IhleStore,
-            tile: IVec2::new(ihle_bahnhof.0 + 2, ihle_bahnhof.1 + 1),
-            interact_tile: IVec2::new(ihle_bahnhof.0 + 2, ihle_bahnhof.1 + 3),
-        },
-        Landmark {
-            name: "Ihle Zentrum".to_string(),
-            kind: LandmarkKind::IhleStore,
-            tile: IVec2::new(ihle_zentrum.0 + 2, ihle_zentrum.1 + 1),
-            interact_tile: IVec2::new(ihle_zentrum.0 + 2, ihle_zentrum.1 + 3),
-        },
-        Landmark {
-            name: "Ihle Nord".to_string(),
-            kind: LandmarkKind::IhleStore,
-            tile: IVec2::new(ihle_nord.0 + 2, ihle_nord.1 + 1),
-            interact_tile: IVec2::new(ihle_nord.0 + 2, ihle_nord.1 + 3),
-        },
-        Landmark {
-            name: "Ihle Sued".to_string(),
-            kind: LandmarkKind::IhleStore,
-            tile: IVec2::new(ihle_sued.0 + 2, ihle_sued.1 + 1),
-            interact_tile: IVec2::new(ihle_sued.0 + 2, ihle_sued.1 + 3),
-        },
+        ihle_landmark("Ihle Bahnhof", ihle_bahnhof),
+        ihle_landmark("Ihle Zentrum", ihle_zentrum),
+        ihle_landmark("Ihle Nord", ihle_nord),
+        ihle_landmark("Ihle Sued", ihle_sued),
     ];
 
     let jannick = Landmark {
         name: "Jannicks Koelner Eck".to_string(),
         kind: LandmarkKind::JannickStore,
-        tile: IVec2::new(jannick_rect.0 + 2, jannick_rect.1 + 1),
-        interact_tile: IVec2::new(jannick_rect.0 + 2, jannick_rect.1 + 3),
+        tile: IVec2::new(86, 57),
+        interact_tile: IVec2::new(86, 59),
     };
 
     let landmarks = vec![
         Landmark {
             name: "Rathaus".to_string(),
             kind: LandmarkKind::Rathaus,
-            tile: IVec2::new(rathaus_rect.0 + 4, rathaus_rect.1 + 3),
-            interact_tile: IVec2::new(rathaus_rect.0 + 4, rathaus_rect.1 + 6),
+            tile: IVec2::new(42, 58),
+            interact_tile: IVec2::new(42, 62),
         },
         Landmark {
             name: "Bahnhof Germering".to_string(),
             kind: LandmarkKind::Bahnhof,
-            tile: IVec2::new(bahnhof_rect.0 + 6, bahnhof_rect.1 + 3),
-            interact_tile: IVec2::new(bahnhof_rect.0 + 6, bahnhof_rect.1 + 6),
+            tile: IVec2::new(28, 90),
+            interact_tile: IVec2::new(28, 88),
         },
         Landmark {
             name: "Aldi Sued".to_string(),
             kind: LandmarkKind::Aldi,
-            tile: IVec2::new(aldi_rect.0 + 4, aldi_rect.1 + 2),
-            interact_tile: IVec2::new(aldi_rect.0 + 4, aldi_rect.1 + 5),
+            tile: IVec2::new(98, 26),
+            interact_tile: IVec2::new(98, 31),
         },
         Landmark {
             name: "Rewe".to_string(),
             kind: LandmarkKind::Rewe,
-            tile: IVec2::new(rewe_rect.0 + 4, rewe_rect.1 + 2),
-            interact_tile: IVec2::new(rewe_rect.0 + 4, rewe_rect.1 + 5),
+            tile: IVec2::new(70, 26),
+            interact_tile: IVec2::new(70, 31),
         },
     ];
 
+    // Kundenadressen — alle auf Bürgersteig-Tiles, also zu Fuß erreichbar.
     let addresses = vec![
-        AddressTarget {
-            name: "Hauptstr. 14".to_string(),
-            tile: IVec2::new(56, 28),
-        },
-        AddressTarget {
-            name: "Untere Bahnhofstr. 7".to_string(),
-            tile: IVec2::new(78, 36),
-        },
-        AddressTarget {
-            name: "Eichenauer Str. 33".to_string(),
-            tile: IVec2::new(110, 38),
-        },
-        AddressTarget {
-            name: "Wittelsbacher Str. 12".to_string(),
-            tile: IVec2::new(30, 48),
-        },
-        AddressTarget {
-            name: "Lerchenweg 5".to_string(),
-            tile: IVec2::new(106, 56),
-        },
-        AddressTarget {
-            name: "Goethestr. 21".to_string(),
-            tile: IVec2::new(80, 78),
-        },
-        AddressTarget {
-            name: "Schillerplatz 3".to_string(),
-            tile: IVec2::new(108, 78),
-        },
-        AddressTarget {
-            name: "Lindenallee 18".to_string(),
-            tile: IVec2::new(58, 98),
-        },
-        AddressTarget {
-            name: "Kirchenplatz 2".to_string(),
-            tile: IVec2::new(62, 58),
-        },
-        AddressTarget {
-            name: "Eschenrieder Str. 9".to_string(),
-            tile: IVec2::new(106, 100),
-        },
-        AddressTarget {
-            name: "Tulpenweg 4".to_string(),
-            tile: IVec2::new(35, 78),
-        },
-        AddressTarget {
-            name: "Roggensteiner Str. 8".to_string(),
-            tile: IVec2::new(34, 38),
-        },
-        AddressTarget {
-            name: "Augsburger Str. 25".to_string(),
-            tile: IVec2::new(82, 120),
-        },
-        AddressTarget {
-            name: "Muenchner Str. 16".to_string(),
-            tile: IVec2::new(58, 120),
-        },
-        AddressTarget {
-            name: "Karl-Sommer-Str. 6".to_string(),
-            tile: IVec2::new(110, 120),
-        },
-        AddressTarget {
-            name: "Stadtpark Nord".to_string(),
-            tile: IVec2::new(18, 18),
-        },
+        addr("Augsburger Str. 12", 26, 24),
+        addr("Kirchenstr. 5", 58, 55),
+        addr("Untere Bahnhofstr. 7", 44, 88),
+        addr("Hauptstr. 14", 80, 66),
+        addr("Eichenauer Str. 33", 110, 41),
+        addr("Wittelsbacher Str. 12", 30, 41),
+        addr("Lerchenweg 5", 98, 55),
+        addr("Goethestr. 21", 82, 77),
+        addr("Schillerplatz 3", 110, 74),
+        addr("Lindenallee 18", 58, 96),
+        addr("Eschenrieder Str. 9", 108, 99),
+        addr("Tulpenweg 4", 40, 77),
+        addr("Roggensteiner Str. 8", 28, 44),
+        addr("Augsburger Str. 25", 108, 24),
+        addr("Muenchner Str. 16", 58, 110),
+        addr("Karl-Sommer-Str. 6", 110, 110),
     ];
 
     let spawn_tile = IVec2::new(48, 64);
@@ -434,79 +398,100 @@ fn generate_map(mut commands: Commands) {
     });
 }
 
-fn place_block(tiles: &mut [TileType], bx: i32, by: i32, bw: i32, bh: i32) {
-    let inner_x = bx + 1;
-    let inner_y = by + 1;
-    let inner_w = bw - 2;
-    let inner_h = bh - 2;
+fn addr(name: &str, x: i32, y: i32) -> AddressTarget {
+    AddressTarget {
+        name: name.to_string(),
+        tile: IVec2::new(x, y),
+    }
+}
 
-    for dy in 0..bh {
-        for dx in 0..bw {
-            let x = bx + dx;
-            let y = by + dy;
-            if x < 0 || y < 0 || x >= MAP_WIDTH || y >= MAP_HEIGHT {
-                continue;
-            }
-            tiles[(y * MAP_WIDTH + x) as usize] = TileType::Grass;
-        }
+/// Build the `Landmark` for an Ihle store from its top-left store corner.
+fn ihle_landmark(name: &str, sx_sy: (i32, i32)) -> Landmark {
+    let (sx, sy) = sx_sy;
+    Landmark {
+        name: name.to_string(),
+        kind: LandmarkKind::IhleStore,
+        tile: IVec2::new(sx + 3, sy + 1),
+        interact_tile: IVec2::new(sx + 3, sy + 3),
+    }
+}
+
+/// Place a 6×3 Ihle bakery at `(sx, sy)` with a 6×2 parking bay directly below
+/// (at the interact tile). The surrounding lot is cleared so the van always has
+/// a clean approach from the street below. Returns the store's top-left corner.
+fn place_ihle(tiles: &mut [TileType], sx: i32, sy: i32) -> (i32, i32) {
+    fill_t(tiles, sx - 1, sy - 1, sx + 6, sy + 4, TileType::Garden);
+    fill_t(tiles, sx, sy, sx + 5, sy + 2, TileType::IhleStore);
+    fill_t(tiles, sx, sy + 3, sx + 5, sy + 4, TileType::Parking);
+    (sx, sy)
+}
+
+/// A supermarket building with a striped parking lot in front (below it).
+fn place_store_with_lot(tiles: &mut [TileType], bx: i32, by: i32, bw: i32, bh: i32, kind: TileType) {
+    fill_t(tiles, bx - 1, by - 1, bx + bw, by + bh + 2, TileType::Grass);
+    place_landmark(tiles, (bx, by, bw, bh), kind);
+    fill_t(tiles, bx, by + bh, bx + bw - 1, by + bh + 1, TileType::Parking);
+}
+
+/// Fill a block with a tidy German residential subdivision: garden ground, rows
+/// of small houses separated by garden lanes, a few hedges and trees.
+fn place_residential(tiles: &mut [TileType], bx0: i32, by0: i32, bx1: i32, by1: i32) {
+    let bw = bx1 - bx0 + 1;
+    let bh = by1 - by0 + 1;
+    if bw < 2 || bh < 2 {
+        return;
+    }
+    fill_t(tiles, bx0, by0, bx1, by1, TileType::Garden);
+    if bw < 4 || bh < 3 {
+        return; // narrow strips stay as gardens
     }
 
-    let strip = 3;
-    if inner_h > strip * 2 {
-        let house_y0 = inner_y;
-        let house_y1 = inner_y + inner_h - strip;
-        for dx in 0..inner_w {
-            let x = inner_x + dx;
-            if dx % 6 < 4 {
-                for dy in 0..strip {
-                    if !(0..MAP_WIDTH).contains(&x) {
-                        continue;
+    let lot_w = 4;
+    let lot_h = 3;
+    let mut ly = by0 + 1;
+    while ly < by1 - 1 {
+        let hy1 = (ly + lot_h - 1).min(by1 - 1);
+        if hy1 - ly + 1 >= 2 {
+            let mut lx = bx0 + 1;
+            while lx + 2 < bx1 {
+                let hx1 = (lx + lot_w - 1).min(bx1 - 1);
+                if hx1 - lx + 1 >= 3 {
+                    for x in lx..=hx1 {
+                        set_t(tiles, x, ly, TileType::Roof);
                     }
-                    tiles[((house_y0 + dy) * MAP_WIDTH + x) as usize] =
-                        if dy == 0 { TileType::Roof } else { TileType::House };
-                    tiles[((house_y1 + dy) * MAP_WIDTH + x) as usize] =
-                        if dy == 0 { TileType::Roof } else { TileType::House };
-                }
-            } else {
-                for dy in 0..strip {
-                    if !(0..MAP_WIDTH).contains(&x) {
-                        continue;
+                    for y in (ly + 1)..=hy1 {
+                        for x in lx..=hx1 {
+                            set_t(tiles, x, y, TileType::House);
+                        }
                     }
-                    tiles[((house_y0 + dy) * MAP_WIDTH + x) as usize] = TileType::Grass;
-                    tiles[((house_y1 + dy) * MAP_WIDTH + x) as usize] = TileType::Grass;
                 }
+                lx += lot_w + 1;
             }
         }
-    }
-    if inner_w > strip * 2 {
-        let house_x0 = inner_x;
-        let house_x1 = inner_x + inner_w - strip;
-        for dy in 0..inner_h {
-            let y = inner_y + dy;
-            if dy % 6 < 4 && y > inner_y + 3 && y < inner_y + inner_h - 3 {
-                for dx in 0..strip {
-                    if !(0..MAP_HEIGHT).contains(&y) {
-                        continue;
-                    }
-                    tiles[(y * MAP_WIDTH + house_x0 + dx) as usize] =
-                        if dx == 0 { TileType::Roof } else { TileType::House };
-                    tiles[(y * MAP_WIDTH + house_x1 + dx) as usize] =
-                        if dx == 0 { TileType::Roof } else { TileType::House };
-                }
-            }
-        }
+        ly += lot_h + 1;
     }
 
-    for dy in 0..inner_h {
-        for dx in 0..inner_w {
-            let x = inner_x + dx;
-            let y = inner_y + dy;
-            if x < 0 || y < 0 || x >= MAP_WIDTH || y >= MAP_HEIGHT {
-                continue;
+    // Scatter trees and the odd hedge into the leftover garden tiles.
+    for y in by0..=by1 {
+        for x in bx0..=bx1 {
+            if get_t(tiles, x, y) == TileType::Garden {
+                if (x * 7 + y * 13).rem_euclid(23) == 0 {
+                    set_t(tiles, x, y, TileType::Tree);
+                } else if (x * 5 + y * 11).rem_euclid(31) == 0 {
+                    set_t(tiles, x, y, TileType::Hedge);
+                }
             }
-            let idx = (y * MAP_WIDTH + x) as usize;
-            if tiles[idx] == TileType::Grass && ((dx * 7 + dy * 11) % 31 == 0) {
-                tiles[idx] = TileType::Tree;
+        }
+    }
+}
+
+/// A park area: green ground with dense tree clusters.
+fn place_park(tiles: &mut [TileType], x0: i32, y0: i32, x1: i32, y1: i32) {
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            set_t(tiles, x, y, TileType::Park);
+            if (x * 5 + y * 3).rem_euclid(11) == 0 {
+                set_t(tiles, x, y, TileType::Tree);
             }
         }
     }
@@ -516,12 +501,7 @@ fn place_landmark(tiles: &mut [TileType], rect: (i32, i32, i32, i32), kind: Tile
     let (x, y, w, h) = rect;
     for dy in 0..h {
         for dx in 0..w {
-            let tx = x + dx;
-            let ty = y + dy;
-            if tx < 0 || ty < 0 || tx >= MAP_WIDTH || ty >= MAP_HEIGHT {
-                continue;
-            }
-            tiles[(ty * MAP_WIDTH + tx) as usize] = kind;
+            set_t(tiles, x + dx, y + dy, kind);
         }
     }
 }
@@ -589,15 +569,13 @@ fn flip_y(buf: &mut [u8], w: u32, h: u32) {
     }
 }
 
-fn draw_tile(
-    buf: &mut [u8],
-    w: u32,
-    px: i32,
-    py: i32,
-    tx: i32,
-    ty: i32,
-    kind: TileType,
-) {
+/// Pick a deterministic palette entry for a tile so neighbouring buildings vary.
+fn variant<const N: usize>(tx: i32, ty: i32, salt: i32, palette: [Rgba; N]) -> Rgba {
+    let i = ((tx / 4) * 13 + (ty / 3) * 7 + salt).rem_euclid(N as i32) as usize;
+    palette[i]
+}
+
+fn draw_tile(buf: &mut [u8], w: u32, px: i32, py: i32, tx: i32, ty: i32, kind: TileType) {
     let size = TILE_SIZE as i32;
     match kind {
         TileType::Grass => {
@@ -623,6 +601,27 @@ fn draw_tile(
                 }
             }
         }
+        TileType::Garden => {
+            // Slightly lush front-yard green, dotted with little flowers.
+            let g: Rgba = (95, 160, 80, 255);
+            let g2: Rgba = (80, 145, 68, 255);
+            fill_rect(buf, w, px, py, size, size, g);
+            for dy in 0..size {
+                for dx in 0..size {
+                    let h = tx * 13 + ty * 7 + dx * 3 + dy * 5;
+                    if h & 7 == 0 {
+                        set_px(buf, w, px + dx, py + dy, g2);
+                    } else if h.rem_euclid(37) == 0 {
+                        let flower: Rgba = match h.rem_euclid(3) {
+                            0 => (235, 90, 90, 255),
+                            1 => (245, 220, 80, 255),
+                            _ => (240, 240, 245, 255),
+                        };
+                        set_px(buf, w, px + dx, py + dy, flower);
+                    }
+                }
+            }
+        }
         TileType::Sidewalk => {
             let c: Rgba = (175, 175, 180, 255);
             let dark: Rgba = (140, 140, 150, 255);
@@ -631,6 +630,22 @@ fn draw_tile(
             fill_rect(buf, w, px, py + size / 2, size, 1, dark);
             fill_rect(buf, w, px, py, 1, size, dark);
             fill_rect(buf, w, px + size / 2, py, 1, size, dark);
+        }
+        TileType::Cobble => {
+            // Warm grey pavement of small set stones (Kirchplatz / forecourts).
+            let base: Rgba = (158, 150, 140, 255);
+            let joint: Rgba = (120, 112, 104, 255);
+            let hi: Rgba = (178, 170, 160, 255);
+            fill_rect(buf, w, px, py, size, size, base);
+            for dy in 0..size {
+                for dx in 0..size {
+                    if dx % 4 == 0 || dy % 4 == 0 {
+                        set_px(buf, w, px + dx, py + dy, joint);
+                    } else if (dx + dy) % 4 == 1 {
+                        set_px(buf, w, px + dx, py + dy, hi);
+                    }
+                }
+            }
         }
         TileType::Road => {
             let c: Rgba = (55, 55, 58, 255);
@@ -672,7 +687,18 @@ fn draw_tile(
             }
         }
         TileType::House => {
-            let body: Rgba = (200, 180, 150, 255);
+            let body = variant(
+                tx,
+                ty,
+                0,
+                [
+                    (200, 180, 150, 255),
+                    (212, 196, 166, 255),
+                    (193, 170, 142, 255),
+                    (206, 188, 158, 255),
+                    (186, 200, 206, 255),
+                ],
+            );
             let outline: Rgba = (90, 60, 40, 255);
             fill_rect(buf, w, px, py, size, size, body);
             fill_rect(buf, w, px, py, size, 1, outline);
@@ -686,8 +712,24 @@ fn draw_tile(
             fill_rect(buf, w, px + 10, py + 10, 3, 3, win);
         }
         TileType::Roof => {
-            let body: Rgba = (160, 70, 50, 255);
-            let outline: Rgba = (80, 30, 20, 255);
+            let body = variant(
+                tx,
+                ty,
+                4,
+                [
+                    (160, 70, 50, 255),
+                    (122, 62, 56, 255),
+                    (150, 92, 56, 255),
+                    (96, 84, 96, 255),
+                    (172, 112, 62, 255),
+                ],
+            );
+            let outline: Rgba = (
+                (body.0 as f32 * 0.55) as u8,
+                (body.1 as f32 * 0.55) as u8,
+                (body.2 as f32 * 0.55) as u8,
+                255,
+            );
             fill_rect(buf, w, px, py, size, size, body);
             for dy in 0..size {
                 for dx in 0..size {
@@ -697,26 +739,23 @@ fn draw_tile(
                 }
             }
         }
-        TileType::IhleStore => {
-            let blue: Rgba = (30, 80, 180, 255);
-            let white: Rgba = (240, 240, 245, 255);
-            let outline: Rgba = (15, 30, 90, 255);
-            fill_rect(buf, w, px, py, size, size, blue);
-            fill_rect(buf, w, px, py, size, 1, outline);
-            fill_rect(buf, w, px, py + size - 1, size, 1, outline);
-            fill_rect(buf, w, px, py, 1, size, outline);
-            fill_rect(buf, w, px + size - 1, py, 1, size, outline);
-            fill_rect(buf, w, px + 2, py + 5, size - 4, 6, white);
-            fill_rect(buf, w, px + 3, py + 6, 1, 4, blue);
-            fill_rect(buf, w, px + 5, py + 6, 1, 4, blue);
-            fill_rect(buf, w, px + 5, py + 6, 2, 1, blue);
-            fill_rect(buf, w, px + 8, py + 6, 1, 4, blue);
-            fill_rect(buf, w, px + 8, py + 6, 3, 1, blue);
-            fill_rect(buf, w, px + 8, py + 9, 3, 1, blue);
-            fill_rect(buf, w, px + 12, py + 6, 1, 4, blue);
-            fill_rect(buf, w, px + 12, py + 6, 2, 1, blue);
-            fill_rect(buf, w, px + 6, py + 2, 4, 2, white);
+        TileType::Hedge => {
+            let g: Rgba = (52, 110, 48, 255);
+            let dark: Rgba = (36, 84, 34, 255);
+            let hi: Rgba = (74, 132, 64, 255);
+            fill_rect(buf, w, px, py, size, size, g);
+            for dy in 0..size {
+                for dx in 0..size {
+                    match (dx * 3 + dy * 5) % 5 {
+                        0 => set_px(buf, w, px + dx, py + dy, dark),
+                        2 => set_px(buf, w, px + dx, py + dy, hi),
+                        _ => {}
+                    }
+                }
+            }
+            fill_rect(buf, w, px, py + size - 1, size, 1, (28, 64, 26, 255));
         }
+        TileType::IhleStore => draw_ihle_bakery(buf, w, px, py, size),
         TileType::JannickStore => {
             let red: Rgba = (210, 35, 35, 255);
             let white: Rgba = (240, 240, 240, 255);
@@ -757,6 +796,25 @@ fn draw_tile(
             fill_rect(buf, w, px + 3, py + 7, 3, 4, win);
             fill_rect(buf, w, px + 10, py + 7, 3, 4, win);
         }
+        TileType::Church => {
+            // Pale stone wall with a tall arched window; the cobbled square and
+            // the building mass read as the parish church St. Martin.
+            let stone: Rgba = (196, 190, 176, 255);
+            let shade: Rgba = (168, 160, 146, 255);
+            let outline: Rgba = (96, 88, 74, 255);
+            let roof: Rgba = (84, 64, 96, 255);
+            let win: Rgba = (90, 140, 190, 255);
+            fill_rect(buf, w, px, py, size, size, stone);
+            fill_rect(buf, w, px, py, size, 3, roof);
+            fill_rect(buf, w, px, py, size, 1, outline);
+            fill_rect(buf, w, px, py + size - 1, size, 1, outline);
+            fill_rect(buf, w, px, py, 1, size, outline);
+            fill_rect(buf, w, px + size - 1, py, 1, size, outline);
+            fill_rect(buf, w, px + 2, py + size / 2, size - 4, 1, shade);
+            fill_rect(buf, w, px + 6, py + 6, 4, 8, win);
+            fill_rect(buf, w, px + 7, py + 5, 2, 1, win);
+            fill_rect(buf, w, px + 7, py + 7, 2, 1, (230, 240, 250, 255));
+        }
         TileType::Bahnhof => {
             let body: Rgba = (200, 170, 120, 255);
             let roof: Rgba = (100, 50, 35, 255);
@@ -773,6 +831,17 @@ fn draw_tile(
             fill_rect(buf, w, px + 11, py + 5, 3, 3, win);
             fill_rect(buf, w, px + 6, py + 5, 4, 5, blue);
             fill_rect(buf, w, px + 7, py + 6, 2, 3, (240, 240, 240, 255));
+        }
+        TileType::Platform => {
+            // Light concrete platform with a yellow safety line at the rail edge.
+            let slab: Rgba = (198, 198, 202, 255);
+            let joint: Rgba = (150, 150, 156, 255);
+            let warn: Rgba = (240, 200, 50, 255);
+            fill_rect(buf, w, px, py, size, size, slab);
+            for dx in (0..size).step_by(4) {
+                fill_rect(buf, w, px + dx, py, 1, size, joint);
+            }
+            fill_rect(buf, w, px, py + size - 2, size, 2, warn);
         }
         TileType::Rails => {
             let ground: Rgba = (90, 80, 65, 255);
@@ -841,4 +910,72 @@ fn draw_tile(
             fill_rect(buf, w, px + 7, py + 6, 2, 4, (90, 50, 25, 255));
         }
     }
+}
+
+/// A warm, recognisable Ihle bakery storefront in one 16×16 tile: red/white
+/// awning, cream "IHLE" sign, a golden Brezn and a shop window with bread.
+fn draw_ihle_bakery(buf: &mut [u8], w: u32, px: i32, py: i32, size: i32) {
+    let facade: Rgba = (212, 180, 138, 255);
+    let outline: Rgba = (96, 62, 36, 255);
+    let cream: Rgba = (240, 230, 205, 255);
+    let letter: Rgba = (84, 52, 30, 255);
+    let red: Rgba = (205, 45, 45, 255);
+    let white: Rgba = (245, 245, 245, 255);
+    let brez: Rgba = (180, 116, 48, 255);
+    let brez_hi: Rgba = (214, 156, 86, 255);
+    let glass: Rgba = (150, 200, 222, 255);
+    let bread: Rgba = (196, 142, 70, 255);
+    let door: Rgba = (120, 80, 48, 255);
+
+    fill_rect(buf, w, px, py, size, size, facade);
+    fill_rect(buf, w, px, py, size, 1, outline);
+    fill_rect(buf, w, px, py + size - 1, size, 1, outline);
+    fill_rect(buf, w, px, py, 1, size, outline);
+    fill_rect(buf, w, px + size - 1, py, 1, size, outline);
+
+    // Striped awning across the top.
+    for i in 0..8 {
+        let col = if i % 2 == 0 { red } else { white };
+        fill_rect(buf, w, px + i * 2, py + 1, 2, 3, col);
+    }
+
+    // Cream sign band with a tiny "IHLE".
+    fill_rect(buf, w, px + 1, py + 4, size - 2, 4, cream);
+    // I
+    fill_rect(buf, w, px + 2, py + 5, 1, 3, letter);
+    // H
+    fill_rect(buf, w, px + 4, py + 5, 1, 3, letter);
+    fill_rect(buf, w, px + 6, py + 5, 1, 3, letter);
+    set_px(buf, w, px + 5, py + 6, letter);
+    // L
+    fill_rect(buf, w, px + 8, py + 5, 1, 3, letter);
+    set_px(buf, w, px + 9, py + 7, letter);
+    // E
+    fill_rect(buf, w, px + 11, py + 5, 1, 3, letter);
+    fill_rect(buf, w, px + 11, py + 5, 2, 1, letter);
+    fill_rect(buf, w, px + 11, py + 6, 2, 1, letter);
+    fill_rect(buf, w, px + 11, py + 7, 2, 1, letter);
+
+    // Golden Brezn emblem.
+    set_px(buf, w, px + 5, py + 9, brez);
+    set_px(buf, w, px + 6, py + 9, brez);
+    set_px(buf, w, px + 9, py + 9, brez);
+    set_px(buf, w, px + 10, py + 9, brez);
+    set_px(buf, w, px + 4, py + 10, brez);
+    set_px(buf, w, px + 7, py + 10, brez_hi);
+    set_px(buf, w, px + 8, py + 10, brez_hi);
+    set_px(buf, w, px + 11, py + 10, brez);
+    for dx in 5..=10 {
+        set_px(buf, w, px + dx, py + 11, brez);
+    }
+    set_px(buf, w, px + 6, py + 12, brez);
+    set_px(buf, w, px + 9, py + 12, brez);
+
+    // Shop window with loaves + a door on the right.
+    fill_rect(buf, w, px + 1, py + 13, 9, 2, glass);
+    fill_rect(buf, w, px + 2, py + 13, 2, 1, bread);
+    fill_rect(buf, w, px + 5, py + 13, 2, 1, bread);
+    fill_rect(buf, w, px + 8, py + 13, 1, 1, bread);
+    fill_rect(buf, w, px + 11, py + 11, 3, 4, door);
+    set_px(buf, w, px + 12, py + 13, (230, 220, 180, 255));
 }

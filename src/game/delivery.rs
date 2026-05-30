@@ -3,14 +3,25 @@
 use bevy::prelude::*;
 use rand::prelude::*;
 
-use crate::game::assets::GameAssets;
+use crate::game::assets::{GameAssets, UiFonts};
 use crate::game::gamestate::GameState;
 use crate::game::map::{AddressTarget, GameMap, Landmark};
 use crate::game::player::Player;
+use crate::game::speech::spawn_speech_bubble;
 
 pub const INTERACT_RADIUS: f32 = 36.0;
 pub const STARTING_LIVES: u32 = 3;
 pub const STARTING_COINS: u32 = 8;
+
+/// Bavarian one-liners the waiting customer says on a successful delivery.
+pub const CUSTOMER_LINES: [&str; 6] = [
+    "Ah, endlich! Vergelt's God!",
+    "Servus, host as ja doch g'schafft!",
+    "Mei, des hod awa dauert...",
+    "Pfiat di, und a schoens Restl!",
+    "Sauba g'liefert, Bua!",
+    "Da schau her, mei Packerl!",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeliveryPhase {
@@ -68,6 +79,10 @@ pub struct PickupMarker;
 
 #[derive(Component)]
 pub struct DropoffMarker;
+
+/// The customer waiting at the active drop-off address.
+#[derive(Component)]
+pub struct WaitingCustomer;
 
 /// Fired when a delivery is dropped off successfully.
 #[derive(Event)]
@@ -209,6 +224,7 @@ fn sync_markers(
     active: Res<ActiveDelivery>,
     pickup_q: Query<Entity, With<PickupMarker>>,
     dropoff_q: Query<Entity, With<DropoffMarker>>,
+    customer_q: Query<Entity, With<WaitingCustomer>>,
 ) {
     let want_pickup = active.phase == DeliveryPhase::GoToPickup;
     let want_dropoff = active.phase == DeliveryPhase::GoToDropoff;
@@ -249,10 +265,32 @@ fn sync_markers(
             },
             DropoffMarker,
         ));
+        // A real person waits at the door for their delivery.
+        let mut rng = thread_rng();
+        let (tex, size) = match rng.gen_range(0..3) {
+            0 => (assets.npc_woman.clone(), Vec2::new(16.0, 22.0)),
+            1 => (assets.npc_elder.clone(), Vec2::new(16.0, 22.0)),
+            _ => (assets.npc_man.clone(), Vec2::new(16.0, 22.0)),
+        };
+        commands.spawn((
+            SpriteBundle {
+                texture: tex,
+                transform: Transform::from_xyz(dropoff_world.x, dropoff_world.y, 6.0),
+                sprite: Sprite {
+                    custom_size: Some(size),
+                    ..default()
+                },
+                ..default()
+            },
+            WaitingCustomer,
+        ));
     }
     if !want_dropoff {
         for e in &dropoff_q {
             commands.entity(e).despawn();
+        }
+        for e in &customer_q {
+            commands.entity(e).despawn_recursive();
         }
     }
 }
@@ -278,10 +316,12 @@ fn bob_markers(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_interaction(
     keys: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
     map: Res<GameMap>,
+    fonts: Res<UiFonts>,
     mut active: ResMut<ActiveDelivery>,
     mut stats: ResMut<DeliveryStats>,
     mut feedback: ResMut<DeliveryFeedback>,
@@ -300,7 +340,8 @@ fn handle_interaction(
     match active.phase {
         DeliveryPhase::GoToPickup => {
             let target = GameMap::tile_to_world(active.pickup.interact_tile);
-            if pos.distance(target) <= INTERACT_RADIUS {
+            // Pakete werden bequem aus dem Sprinter geladen (Parkbucht davor).
+            if !player.is_on_foot() && pos.distance(target) <= INTERACT_RADIUS {
                 player.has_package = true;
                 active.phase = DeliveryPhase::GoToDropoff;
                 if player.is_boosted() {
@@ -315,7 +356,8 @@ fn handle_interaction(
         }
         DeliveryPhase::GoToDropoff => {
             let target = GameMap::tile_to_world(active.dropoff.tile);
-            if pos.distance(target) <= INTERACT_RADIUS {
+            // Zum Kunden muss man aussteigen und zu Fuß zur Tür gehen.
+            if player.is_on_foot() && pos.distance(target) <= INTERACT_RADIUS {
                 player.has_package = false;
                 let remaining = active.time_remaining.max(0.0);
                 let time_frac = remaining / active.time_limit.max(1.0);
@@ -361,6 +403,19 @@ fn handle_interaction(
                     streak: stats.streak,
                 });
 
+                // The grateful customer says something in Bavarian.
+                let mut rng = thread_rng();
+                let line = CUSTOMER_LINES.choose(&mut rng).copied().unwrap_or("Danke!");
+                spawn_speech_bubble(
+                    &mut commands,
+                    &fonts,
+                    None,
+                    target,
+                    line,
+                    Color::srgb(0.95, 0.95, 0.7),
+                    2.6,
+                );
+
                 let next = generate_delivery(&map, stats.delivery_count);
                 commands.insert_resource(next);
             }
@@ -391,11 +446,15 @@ fn clear_markers_on_exit(
     mut commands: Commands,
     pickup_q: Query<Entity, With<PickupMarker>>,
     dropoff_q: Query<Entity, With<DropoffMarker>>,
+    customer_q: Query<Entity, With<WaitingCustomer>>,
 ) {
     for e in &pickup_q {
         commands.entity(e).despawn();
     }
     for e in &dropoff_q {
         commands.entity(e).despawn();
+    }
+    for e in &customer_q {
+        commands.entity(e).despawn_recursive();
     }
 }

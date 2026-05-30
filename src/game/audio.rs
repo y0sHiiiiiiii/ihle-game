@@ -76,10 +76,14 @@ pub struct AudioBank {
     pub nitro: Handle<Pcm>,
     pub buzzer: Handle<Pcm>,
     pub blip: Handle<Pcm>,
+    pub music: Handle<Pcm>,
 }
 
 #[derive(Component)]
 pub struct EngineSound;
+
+#[derive(Component)]
+pub struct MusicSound;
 
 /// Fire to play the UI confirmation blip from any state (menus, pause, …).
 #[derive(Event)]
@@ -94,6 +98,7 @@ impl Plugin for AudioPlugin {
             .add_event::<UiBlipEvent>()
             .add_systems(Update, sfx_ui_blip)
             .add_systems(Startup, build_audio_bank)
+            .add_systems(PostStartup, start_music)
             .add_systems(OnEnter(GameState::Playing), start_engine)
             .add_systems(OnExit(GameState::Playing), stop_engine)
             .add_systems(
@@ -141,6 +146,9 @@ fn build_audio_bank(mut pcm: ResMut<Assets<Pcm>>, mut bank: ResMut<AudioBank>) {
     });
     bank.blip = pcm.add(Pcm {
         samples: Arc::new(make_blip()),
+    });
+    bank.music = pcm.add(Pcm {
+        samples: Arc::new(make_music()),
     });
 }
 
@@ -269,6 +277,105 @@ fn make_blip() -> Vec<f32> {
     out
 }
 
+/// A bouncy, original Mario-style chiptune loop: a square-wave lead over a
+/// pulsing bass line. One phrase, looped seamlessly by the audio graph.
+fn make_music() -> Vec<f32> {
+    // Note frequencies (Hz).
+    const D4: f32 = 293.66;
+    const G4: f32 = 392.00;
+    const A4: f32 = 440.00;
+    const B4: f32 = 493.88;
+    const C5: f32 = 523.25;
+    const D5: f32 = 587.33;
+    const E5: f32 = 659.25;
+    const F5: f32 = 698.46;
+    const G5: f32 = 783.99;
+    const A5: f32 = 880.00;
+    const C6: f32 = 1046.50;
+    const REST: f32 = 0.0;
+    // Bass roots.
+    const C3: f32 = 130.81;
+    const F3: f32 = 174.61;
+    const G3: f32 = 196.00;
+
+    let beat = 0.15; // seconds per eighth note
+
+    // (frequency, length in eighths) — a single 32-beat phrase.
+    let lead: [(f32, f32); 28] = [
+        (G4, 1.0), (C5, 1.0), (E5, 1.0), (G5, 1.0),
+        (E5, 1.0), (C5, 1.0), (REST, 1.0), (G4, 1.0),
+        (A4, 1.0), (C5, 1.0), (F5, 1.0), (A5, 1.0),
+        (F5, 1.0), (C5, 1.0), (REST, 1.0), (A4, 1.0),
+        (G4, 1.0), (B4, 1.0), (D5, 1.0), (G5, 1.0),
+        (D5, 1.0), (B4, 1.0), (REST, 1.0), (D4, 1.0),
+        (C5, 2.0), (E5, 2.0), (G5, 2.0), (C6, 2.0),
+    ];
+    // One bass root per 8-eighth bar: C – F – G – C.
+    let bass_roots = [C3, F3, G3, C3];
+
+    // Total length: build a schedule of (start, end, freq) for the lead.
+    let mut schedule: Vec<(f32, f32, f32)> = Vec::with_capacity(lead.len());
+    let mut t_cursor = 0.0f32;
+    for &(freq, beats) in &lead {
+        let dur = beats * beat;
+        schedule.push((t_cursor, t_cursor + dur, freq));
+        t_cursor += dur;
+    }
+    let total_time = t_cursor;
+    let bar_time = 8.0 * beat;
+    let len = n_samples(total_time);
+    let mut out = vec![0.0f32; len];
+
+    let square = |phase: f32| -> f32 {
+        if phase.fract() < 0.5 {
+            1.0
+        } else {
+            -1.0
+        }
+    };
+
+    let mut bass_lp = 0.0f32;
+    for (i, s) in out.iter_mut().enumerate() {
+        let t = i as f32 / SAMPLE_RATE as f32;
+
+        // --- Lead ---
+        let mut lead_v = 0.0;
+        for &(start, end, freq) in &schedule {
+            if t >= start && t < end && freq > 1.0 {
+                let lt = t - start;
+                let note_len = end - start;
+                // Short attack, gentle decay, quick release near the end.
+                let attack = (lt / 0.008).clamp(0.0, 1.0);
+                let release = ((note_len - lt) / 0.03).clamp(0.0, 1.0);
+                let decay = 0.7 + 0.3 * (-lt * 3.0).exp();
+                lead_v = square(freq * t) * attack * release * decay * 0.16;
+                break;
+            }
+        }
+
+        // --- Bass (re-triggered every eighth for bounce) ---
+        let bar = ((t / bar_time) as usize) % bass_roots.len();
+        let root = bass_roots[bar];
+        let pulse_t = (t / beat).fract() * beat;
+        let benv = (-pulse_t * 9.0).exp();
+        let bass_raw = square(root * t) * benv * 0.13;
+        // Soften the bass square a touch.
+        bass_lp += (bass_raw - bass_lp) * 0.35;
+
+        *s = lead_v + bass_lp;
+    }
+
+    // Short fade-in/out across the loop seam to avoid a click on repeat.
+    let fade = n_samples(0.012).min(len / 4);
+    for k in 0..fade {
+        let g = k as f32 / fade as f32;
+        out[k] *= g;
+        out[len - 1 - k] *= g;
+    }
+
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Playback
 // ---------------------------------------------------------------------------
@@ -280,6 +387,17 @@ fn play_once(commands: &mut Commands, handle: Handle<Pcm>, volume: f32) {
             settings: PlaybackSettings::DESPAWN
                 .with_volume(bevy::audio::Volume::new(volume * MASTER)),
         },
+    ));
+}
+
+fn start_music(mut commands: Commands, bank: Res<AudioBank>) {
+    commands.spawn((
+        bevy::audio::AudioSourceBundle {
+            source: bank.music.clone(),
+            settings: PlaybackSettings::LOOP
+                .with_volume(bevy::audio::Volume::new(0.32 * MASTER)),
+        },
+        MusicSound,
     ));
 }
 
@@ -306,8 +424,13 @@ fn drive_engine(
     let Ok(sink) = sink_q.get_single() else {
         return;
     };
-    let speed_frac = player_q
-        .get_single()
+    let player = player_q.get_single().ok();
+    // Engine goes quiet when the driver hops out (van parked, hazards on).
+    if player.map(|p| p.is_on_foot()).unwrap_or(false) {
+        sink.set_volume(0.0);
+        return;
+    }
+    let speed_frac = player
         .map(|p| (p.velocity.length() / PLAYER_BASE_MAX_SPEED).clamp(0.0, 1.6))
         .unwrap_or(0.0);
     // Idle hum that revs with speed.

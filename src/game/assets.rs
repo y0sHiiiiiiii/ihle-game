@@ -91,6 +91,12 @@ pub struct GameAssets {
     pub coin_icon: Handle<Image>,
     pub arrow: Handle<Image>,
     pub spark: Handle<Image>,
+    /// Top-view traffic cars in assorted colours (facing north/up).
+    pub traffic_cars: Vec<Handle<Image>>,
+    /// Player on foot, facing south/down. Flip_x for left/right.
+    pub player_foot: Handle<Image>,
+    /// Small round traffic-light lamp (tinted red/green at runtime).
+    pub light_dot: Handle<Image>,
 }
 
 pub type Rgba = (u8, u8, u8, u8);
@@ -154,6 +160,20 @@ fn generate_all_sprites(mut images: ResMut<Assets<Image>>, mut assets: ResMut<Ga
     assets.pickup_marker = images.add(make_image(12, 12, draw_pickup_marker()));
     assets.coin_icon = images.add(make_image(8, 8, draw_coin()));
     assets.arrow = images.add(make_image(16, 16, draw_arrow()));
+    let car_colors: [(u8, u8, u8); 6] = [
+        (200, 45, 45),
+        (40, 120, 210),
+        (235, 200, 50),
+        (60, 165, 95),
+        (150, 152, 162),
+        (185, 95, 35),
+    ];
+    assets.traffic_cars = car_colors
+        .iter()
+        .map(|&c| images.add(make_image(16, 22, draw_traffic_car(c))))
+        .collect();
+    assets.player_foot = images.add(make_image(12, 16, draw_player_foot()));
+    assets.light_dot = images.add(make_image(10, 10, draw_light_dot()));
 }
 
 // Shared van palette.
@@ -162,8 +182,11 @@ const VAN_SHADE: Rgba = (205, 208, 220, 255);
 const VAN_OUTLINE: Rgba = (22, 22, 30, 255);
 const VAN_WINDOW: Rgba = (120, 195, 235, 255);
 const VAN_WINDOW_HI: Rgba = (180, 225, 245, 255);
-const VAN_BLUE: Rgba = (30, 80, 180, 255);
-const VAN_DBLUE: Rgba = (18, 50, 130, 255);
+// Warm Ihle-bakery branding for the van livery.
+const VAN_SIGN_CREAM: Rgba = (240, 230, 205, 255);
+const VAN_SIGN_RED: Rgba = (205, 45, 45, 255);
+const VAN_SIGN_BROWN: Rgba = (96, 60, 34, 255);
+const VAN_BREZ: Rgba = (190, 122, 52, 255);
 const VAN_WHEEL: Rgba = (26, 26, 32, 255);
 const VAN_HUB: Rgba = (90, 92, 105, 255);
 const VAN_LIGHT: Rgba = (255, 240, 180, 255);
@@ -201,15 +224,21 @@ fn draw_van_side(frame: u8) -> Vec<u8> {
     fill_rect(&mut buf, w, 1, 2, 1, 3, VAN_TAIL);
     fill_rect(&mut buf, w, 1, 11, 1, 3, VAN_TAIL);
 
-    // Ihle logo panel on the side.
-    fill_rect(&mut buf, w, 5, 5, 9, 6, VAN_BLUE);
-    fill_rect(&mut buf, w, 5, 6, 1, 4, VAN_BODY);
-    fill_rect(&mut buf, w, 7, 5, 1, 6, VAN_BODY);
-    fill_rect(&mut buf, w, 9, 5, 1, 6, VAN_BODY);
-    fill_rect(&mut buf, w, 11, 5, 1, 6, VAN_BODY);
-    fill_rect(&mut buf, w, 13, 5, 1, 6, VAN_BODY);
-    fill_rect(&mut buf, w, 5, 7, 9, 1, VAN_DBLUE);
-    fill_rect(&mut buf, w, 5, 9, 9, 1, VAN_DBLUE);
+    // Ihle bakery livery on the side: cream sign with a red awning edge, an
+    // "IHLE" wordmark and a little golden Brezn.
+    fill_rect(&mut buf, w, 4, 4, 11, 7, VAN_SIGN_CREAM);
+    fill_rect(&mut buf, w, 4, 4, 11, 1, VAN_SIGN_RED); // awning edge
+    // I H L E (3px tall at y6..8).
+    fill_rect(&mut buf, w, 5, 6, 1, 3, VAN_SIGN_BROWN);
+    fill_rect(&mut buf, w, 7, 6, 1, 3, VAN_SIGN_BROWN);
+    fill_rect(&mut buf, w, 9, 6, 1, 3, VAN_SIGN_BROWN);
+    set_px(&mut buf, w, 8, 7, VAN_SIGN_BROWN);
+    fill_rect(&mut buf, w, 11, 6, 1, 3, VAN_SIGN_BROWN);
+    set_px(&mut buf, w, 12, 8, VAN_SIGN_BROWN);
+    // Brezn dot.
+    set_px(&mut buf, w, 13, 6, VAN_BREZ);
+    set_px(&mut buf, w, 13, 7, VAN_BREZ);
+    set_px(&mut buf, w, 12, 6, VAN_BREZ);
 
     buf
 }
@@ -245,12 +274,17 @@ fn draw_van_top(frame: u8) -> Vec<u8> {
     fill_rect(&mut buf, w, 2, 21, 3, 1, VAN_TAIL);
     fill_rect(&mut buf, w, 11, 21, 3, 1, VAN_TAIL);
 
-    // Ihle roof badge.
-    fill_rect(&mut buf, w, 4, 9, 8, 8, VAN_BLUE);
-    fill_rect(&mut buf, w, 5, 10, 6, 6, VAN_BODY);
-    fill_rect(&mut buf, w, 6, 11, 4, 1, VAN_BLUE);
-    fill_rect(&mut buf, w, 6, 13, 4, 1, VAN_BLUE);
-    fill_rect(&mut buf, w, 7, 11, 2, 4, VAN_BLUE);
+    // Ihle roof badge: cream plate, red border, golden Brezn.
+    fill_rect(&mut buf, w, 4, 9, 8, 8, VAN_SIGN_RED);
+    fill_rect(&mut buf, w, 5, 10, 6, 6, VAN_SIGN_CREAM);
+    set_px(&mut buf, w, 6, 11, VAN_BREZ);
+    set_px(&mut buf, w, 7, 11, VAN_BREZ);
+    set_px(&mut buf, w, 9, 11, VAN_BREZ);
+    fill_rect(&mut buf, w, 6, 12, 4, 1, VAN_BREZ);
+    set_px(&mut buf, w, 7, 13, VAN_BREZ);
+    set_px(&mut buf, w, 8, 13, VAN_BREZ);
+    set_px(&mut buf, w, 7, 14, VAN_SIGN_BROWN);
+    set_px(&mut buf, w, 8, 14, VAN_SIGN_BROWN);
 
     buf
 }
@@ -289,7 +323,8 @@ fn draw_sprinter_icon() -> Vec<u8> {
     let mut buf = vec![0u8; (w * h * 4) as usize];
     let body: Rgba = (242, 242, 248, 255);
     let outline: Rgba = (20, 20, 25, 255);
-    let blue: Rgba = (30, 80, 180, 255);
+    let cream: Rgba = (240, 230, 205, 255);
+    let red: Rgba = (205, 45, 45, 255);
     let wheel: Rgba = (28, 28, 32, 255);
     let window: Rgba = (130, 200, 235, 255);
     fill_rect(&mut buf, w, 0, 1, 16, 8, outline);
@@ -299,7 +334,8 @@ fn draw_sprinter_icon() -> Vec<u8> {
     fill_rect(&mut buf, w, 1, 8, 2, 2, wheel);
     fill_rect(&mut buf, w, 13, 8, 2, 2, wheel);
     fill_rect(&mut buf, w, 11, 3, 3, 4, window);
-    fill_rect(&mut buf, w, 3, 3, 6, 4, blue);
+    fill_rect(&mut buf, w, 3, 3, 6, 4, cream);
+    fill_rect(&mut buf, w, 3, 3, 6, 1, red);
     buf
 }
 
@@ -483,5 +519,115 @@ fn draw_arrow() -> Vec<u8> {
         set_px(&mut buf, w, 9 + dy, 7 - dy + 3, dark);
         set_px(&mut buf, w, 9 + dy, 7 + dy - 3, dark);
     }
+    buf
+}
+
+/// Top-view traffic car facing north (+y, up). Body colour is parameterised so
+/// we can spawn a colourful mix of cars. Rotated at runtime for other headings.
+fn draw_traffic_car(body: (u8, u8, u8)) -> Vec<u8> {
+    let w = 16u32;
+    let h = 22u32;
+    let mut buf = vec![0u8; (w * h * 4) as usize];
+    let outline: Rgba = (18, 18, 24, 255);
+    let window: Rgba = (130, 200, 235, 255);
+    let wheel: Rgba = (26, 26, 32, 255);
+    let b: Rgba = (body.0, body.1, body.2, 255);
+    let shade: Rgba = (
+        (body.0 as f32 * 0.7) as u8,
+        (body.1 as f32 * 0.7) as u8,
+        (body.2 as f32 * 0.7) as u8,
+        255,
+    );
+    let light: Rgba = (255, 240, 180, 255);
+    let tail: Rgba = (220, 60, 50, 255);
+
+    // Wheels poke out the sides.
+    for &wy in &[3i32, 15] {
+        fill_rect(&mut buf, w, 0, wy, 2, 4, wheel);
+        fill_rect(&mut buf, w, 14, wy, 2, 4, wheel);
+    }
+
+    // Body.
+    fill_rect(&mut buf, w, 2, 1, 12, 20, outline);
+    fill_rect(&mut buf, w, 3, 2, 10, 18, b);
+    fill_rect(&mut buf, w, 3, 2, 2, 18, shade); // left shading
+
+    // Windshield (front/top) + rear window.
+    fill_rect(&mut buf, w, 4, 4, 8, 3, window);
+    fill_rect(&mut buf, w, 4, 15, 8, 3, window);
+    // Roof in between.
+    fill_rect(&mut buf, w, 5, 8, 6, 6, shade);
+
+    // Head- and tail-lights.
+    fill_rect(&mut buf, w, 4, 2, 2, 1, light);
+    fill_rect(&mut buf, w, 10, 2, 2, 1, light);
+    fill_rect(&mut buf, w, 4, 20, 2, 1, tail);
+    fill_rect(&mut buf, w, 10, 20, 2, 1, tail);
+
+    buf
+}
+
+/// A small round traffic-light lamp on a dark housing. The white centre gets
+/// tinted red or green at runtime via the sprite colour.
+fn draw_light_dot() -> Vec<u8> {
+    let w = 10u32;
+    let h = 10u32;
+    let mut buf = vec![0u8; (w * h * 4) as usize];
+    let housing: Rgba = (16, 16, 20, 255);
+    let lamp: Rgba = (255, 255, 255, 255);
+    let cx = 4.5f32;
+    let cy = 4.5f32;
+    for y in 0..h as i32 {
+        for x in 0..w as i32 {
+            let dx = x as f32 - cx;
+            let dy = y as f32 - cy;
+            let d2 = dx * dx + dy * dy;
+            if d2 <= 20.0 {
+                set_px(&mut buf, w, x, y, housing);
+            }
+            if d2 <= 8.0 {
+                set_px(&mut buf, w, x, y, lamp);
+            }
+        }
+    }
+    buf
+}
+
+/// Player on foot facing south (toward the camera). A little delivery driver in
+/// a blue Ihle polo. Flip horizontally to suggest walking left/right.
+fn draw_player_foot() -> Vec<u8> {
+    let w = 12u32;
+    let h = 16u32;
+    let mut buf = vec![0u8; (w * h * 4) as usize];
+    let skin: Rgba = (245, 200, 165, 255);
+    let polo: Rgba = (30, 80, 180, 255);
+    let polo_hi: Rgba = (60, 120, 220, 255);
+    let pants: Rgba = (40, 40, 55, 255);
+    let shoe: Rgba = (20, 20, 25, 255);
+    let hair: Rgba = (70, 45, 25, 255);
+    let outline: Rgba = (20, 20, 25, 255);
+
+    // Head.
+    fill_rect(&mut buf, w, 3, 1, 6, 5, outline);
+    fill_rect(&mut buf, w, 4, 2, 4, 4, skin);
+    fill_rect(&mut buf, w, 3, 1, 6, 2, hair);
+    fill_rect(&mut buf, w, 5, 3, 1, 1, outline);
+    fill_rect(&mut buf, w, 7, 3, 1, 1, outline);
+
+    // Torso (Ihle polo) with arms.
+    fill_rect(&mut buf, w, 2, 6, 8, 5, outline);
+    fill_rect(&mut buf, w, 3, 7, 6, 4, polo);
+    fill_rect(&mut buf, w, 3, 7, 6, 1, polo_hi);
+    fill_rect(&mut buf, w, 1, 7, 2, 3, polo);
+    fill_rect(&mut buf, w, 9, 7, 2, 3, polo);
+    fill_rect(&mut buf, w, 1, 10, 2, 1, skin);
+    fill_rect(&mut buf, w, 9, 10, 2, 1, skin);
+
+    // Legs.
+    fill_rect(&mut buf, w, 3, 11, 6, 4, pants);
+    fill_rect(&mut buf, w, 5, 11, 1, 4, outline);
+    fill_rect(&mut buf, w, 6, 11, 1, 4, outline);
+    fill_rect(&mut buf, w, 3, 15, 2, 1, shoe);
+    fill_rect(&mut buf, w, 7, 15, 2, 1, shoe);
     buf
 }
